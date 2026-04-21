@@ -1,6 +1,7 @@
 use super::error::{Result, TaskError};
 use super::models::{CreateTaskParams, TaskSnapshot, UpdateTaskParams};
 use super::query::{Pagination, Query, QueryResult, SortField, TaskFilter};
+use super::query_language::matches_query;
 use super::utils::{
     parse_date_opt_str_strict, parse_date_opt_strict, parse_iso8601, task_snapshot_from_task,
 };
@@ -1467,10 +1468,7 @@ fn matches_filter(task: &taskchampion::Task, filter: &TaskFilter) -> bool {
         }
     }
     if let Some(term) = &filter.search_term {
-        let term = term.to_lowercase();
-        let description = task.get_description().to_lowercase();
-        let project = task.get_value("project").unwrap_or("").to_lowercase();
-        if !description.contains(&term) && !project.contains(&term) {
+        if !matches_query(task, term) {
             return false;
         }
     }
@@ -1492,8 +1490,30 @@ fn sort_snapshots(tasks: &mut [TaskSnapshot], field: SortField, descending: bool
                 .urgency
                 .partial_cmp(&b.computed.urgency)
                 .unwrap_or(std::cmp::Ordering::Equal),
-            SortField::Due => a.core.due.cmp(&b.core.due),
-            SortField::Created => a.core.entry.cmp(&b.core.entry),
+            SortField::Due => match (&a.core.due, &b.core.due) {
+                (Some(a_due), Some(b_due)) => a_due.cmp(b_due),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            },
+            SortField::Created => {
+                let a_entry = if a.core.entry.is_empty() {
+                    None
+                } else {
+                    Some(&a.core.entry)
+                };
+                let b_entry = if b.core.entry.is_empty() {
+                    None
+                } else {
+                    Some(&b.core.entry)
+                };
+                match (a_entry, b_entry) {
+                    (Some(a_e), Some(b_e)) => a_e.cmp(b_e),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal,
+                }
+            }
         };
 
         if descending {
@@ -1988,6 +2008,8 @@ mod tests {
                 recurrence: None,
                 annotations: vec![],
                 udas: vec![],
+                parent_uuid: None,
+                recurrence_index: None,
             },
             computed: super::super::models::TaskComputed {
                 urgency: 0.0,
@@ -1995,6 +2017,9 @@ mod tests {
                 is_blocked: false,
                 is_blocking: false,
                 is_waiting: false,
+                is_recurring_template: false,
+                is_recurring_instance: false,
+                series_root_uuid: None,
             },
         }])
         .expect("serialize payload");

@@ -2,6 +2,7 @@ pub mod error;
 pub mod manager;
 pub mod models;
 pub mod query;
+mod query_language;
 pub mod utils;
 
 pub use error::{Result, TaskError};

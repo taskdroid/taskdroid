@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:taskdroid/models/filter_tab.dart';
 import 'package:taskdroid/providers/app_state.dart';
 import 'package:taskdroid/providers/profile_state.dart';
 import 'package:taskdroid/providers/task_state.dart';
+import 'package:taskdroid/services/task_query_language.dart';
 import 'package:taskdroid/src/rust/api.dart';
 import 'package:taskdroid/views/onboarding.dart';
 import 'package:taskdroid/widgets/app_drawer.dart';
@@ -185,25 +187,41 @@ class _HomePageState extends State<HomePage>
       return const _NoProfileState();
     }
 
+    final usesExplicitStatusScope = taskState.usesExplicitStatusScope;
+
     return Column(
       children: [
         if (taskState.isSyncing) const LinearProgressIndicator(minHeight: 2),
         const FilterTabsRow(),
-        _QueueViewAndSearchToggleRow(
-          selected: taskState.queueView,
-          readyCount: taskState.pendingTasks.length,
-          waitingCount: taskState.waitingTasks.length,
-          scheduledCount: taskState.scheduledTasks.length,
-          onSelected: taskState.setQueueView,
-          isSearchVisible: _isSearchVisible,
-          onToggleSearch: () {
-            setState(() {
-              _isSearchVisible = !_isSearchVisible;
-            });
-          },
-          filterCount:
-              taskState.selectedTags.length + taskState.selectedProjects.length,
-        ),
+        if (usesExplicitStatusScope)
+          _BroadResultsBar(
+            resultCount: taskState.filteredTasks.length,
+            isSearchVisible: _isSearchVisible,
+            onToggleSearch: () {
+              setState(() {
+                _isSearchVisible = !_isSearchVisible;
+              });
+            },
+          )
+        else
+          _QueueViewAndSearchToggleRow(
+            selected: taskState.queueView,
+            readyCount: taskState.pendingTasks.length,
+            waitingCount: taskState.waitingTasks.length,
+            scheduledCount: taskState.scheduledTasks.length,
+            onSelected: taskState.setQueueView,
+            isSearchVisible: _isSearchVisible,
+            onToggleSearch: () {
+              setState(() {
+                _isSearchVisible = !_isSearchVisible;
+              });
+            },
+            filterCount:
+                taskState.includeTags.length +
+                taskState.excludeTags.length +
+                taskState.includeProjects.length +
+                taskState.excludeProjects.length,
+          ),
         AnimatedSize(
           duration: const Duration(milliseconds: 200),
           curve: Curves.easeInOut,
@@ -211,15 +229,22 @@ class _HomePageState extends State<HomePage>
           child: _isSearchVisible
               ? _SearchAndFiltersRow(
                   searchQuery: taskState.searchQuery,
+                  parsedQuery: taskState.parsedSearchQuery,
                   onSearchChanged: taskState.setSearchQuery,
-                  selectedTags: taskState.selectedTags,
-                  selectedProjects: taskState.selectedProjects,
+                  includeTags: taskState.includeTags,
+                  excludeTags: taskState.excludeTags,
+                  tagMatchMode: taskState.tagMatchMode,
+                  includeProjects: taskState.includeProjects,
+                  excludeProjects: taskState.excludeProjects,
+                  projectMatchMode: taskState.projectMatchMode,
                   onOpenTags: () => _showTagSelector(context, taskState),
                   onOpenProjects: () =>
                       _showProjectSelector(context, taskState),
                   onClear: taskState.clearFilters,
                   onRemoveTag: taskState.toggleTag,
+                  onRemoveExcludedTag: taskState.toggleExcludedTag,
                   onRemoveProject: taskState.toggleProject,
+                  onRemoveExcludedProject: taskState.toggleExcludedProject,
                 )
               : const SizedBox(width: double.infinity, height: 0),
         ),
@@ -343,7 +368,10 @@ class _HomePageState extends State<HomePage>
   }
 
   Widget _buildTaskBody(BuildContext context, TaskState taskState) {
-    if (taskState.error != null && taskState.currentViewTasks.isEmpty) {
+    final sourceTasks = taskState.displaySourceTasks;
+    final filteredTasks = taskState.filteredTasks;
+
+    if (taskState.error != null && sourceTasks.isEmpty) {
       return _InlineMessageState(
         icon: Icons.error_outline,
         title: 'Unable to load tasks',
@@ -353,11 +381,11 @@ class _HomePageState extends State<HomePage>
       );
     }
 
-    if (taskState.isLoading && taskState.currentViewTasks.isEmpty) {
+    if (taskState.isLoading && sourceTasks.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (taskState.currentViewTasks.isEmpty) {
+    if (sourceTasks.isEmpty && !taskState.usesExplicitStatusScope) {
       return _InlineMessageState(
         icon: Icons.task_alt,
         title: 'You\'re all caught up!',
@@ -373,7 +401,7 @@ class _HomePageState extends State<HomePage>
       );
     }
 
-    if (taskState.filteredTasks.isEmpty) {
+    if (filteredTasks.isEmpty) {
       return _InlineMessageState(
         icon: Icons.search_off,
         title: 'No matches found',
@@ -394,9 +422,9 @@ class _HomePageState extends State<HomePage>
             delegate: SliverChildBuilderDelegate(
               (context, index) => Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                child: TaskListItem(task: taskState.filteredTasks[index]),
+                child: TaskListItem(task: filteredTasks[index]),
               ),
-              childCount: taskState.filteredTasks.length,
+              childCount: filteredTasks.length,
             ),
           ),
           const SliverToBoxAdapter(child: SizedBox(height: 120)),
@@ -547,21 +575,17 @@ class _HomePageState extends State<HomePage>
     BuildContext context,
     TaskState taskState,
   ) async {
-    final local = Set<String>.from(taskState.selectedTags);
-    await _showFilterSheet(
+    await _showIncludeExcludeFilterSheet<String>(
       context,
       'Filter by Tags',
       taskState.allTags,
-      local,
-      (updated) {
-        final toAdd = updated.difference(taskState.selectedTags);
-        final toRemove = taskState.selectedTags.difference(updated);
-        for (final tag in toAdd) {
-          taskState.toggleTag(tag);
-        }
-        for (final tag in toRemove) {
-          taskState.toggleTag(tag);
-        }
+      initialInclude: taskState.includeTags,
+      initialExclude: taskState.excludeTags,
+      initialMode: taskState.tagMatchMode,
+      modeLabel: 'Match mode',
+      itemLabel: (tag) => tag,
+      onApply: (include, exclude, mode) {
+        taskState.setTagFilters(include: include, exclude: exclude, mode: mode);
       },
     );
   }
@@ -570,95 +594,299 @@ class _HomePageState extends State<HomePage>
     BuildContext context,
     TaskState taskState,
   ) async {
-    final local = Set<String>.from(taskState.selectedProjects);
-    await _showFilterSheet(
+    await _showIncludeExcludeFilterSheet<String>(
       context,
       'Filter by Projects',
       taskState.allProjects,
-      local,
-      (updated) {
-        final toAdd = updated.difference(taskState.selectedProjects);
-        final toRemove = taskState.selectedProjects.difference(updated);
-        for (final project in toAdd) {
-          taskState.toggleProject(project);
-        }
-        for (final project in toRemove) {
-          taskState.toggleProject(project);
-        }
+      initialInclude: taskState.includeProjects,
+      initialExclude: taskState.excludeProjects,
+      initialMode: taskState.projectMatchMode,
+      modeLabel: 'Match mode',
+      itemLabel: (project) => project,
+      onApply: (include, exclude, mode) {
+        taskState.setProjectFilters(
+          include: include,
+          exclude: exclude,
+          mode: mode,
+        );
       },
     );
   }
 
-  Future<void> _showFilterSheet(
+  Future<void> _showIncludeExcludeFilterSheet<T>(
     BuildContext context,
     String title,
-    Set<String> allItems,
-    Set<String> localSelections,
-    Function(Set<String>) onApply,
-  ) async {
+    Set<T> allItems, {
+    required Set<T> initialInclude,
+    required Set<T> initialExclude,
+    required FilterMatchMode initialMode,
+    required String modeLabel,
+    bool enableModeToggle = true,
+    required String Function(T) itemLabel,
+    required void Function(Set<T>, Set<T>, FilterMatchMode) onApply,
+  }) async {
     final theme = Theme.of(context);
-    final applied = await showModalBottomSheet<Set<String>>(
+    final include = Set<T>.from(initialInclude);
+    final exclude = Set<T>.from(initialExclude);
+    final sortedItems = allItems.toList()
+      ..sort(
+        (a, b) =>
+            itemLabel(a).toLowerCase().compareTo(itemLabel(b).toLowerCase()),
+      );
+    final applied = await showModalBottomSheet<_IncludeExcludeSelection<T>>(
       context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (context) {
+        var mode = initialMode;
+        var itemSearch = '';
         return StatefulBuilder(
           builder: (context, setModalState) {
-            return SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: theme.textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
+            _FilterSelectionState stateFor(T item) {
+              if (include.contains(item)) return _FilterSelectionState.include;
+              if (exclude.contains(item)) return _FilterSelectionState.exclude;
+              return _FilterSelectionState.none;
+            }
+
+            void cycleState(T item) {
+              final current = stateFor(item);
+              switch (current) {
+                case _FilterSelectionState.none:
+                  include.add(item);
+                  exclude.remove(item);
+                case _FilterSelectionState.include:
+                  include.remove(item);
+                  exclude.add(item);
+                case _FilterSelectionState.exclude:
+                  exclude.remove(item);
+              }
+            }
+
+            final visibleItems = sortedItems.where((item) {
+              if (itemSearch.isEmpty) return true;
+              return itemLabel(
+                item,
+              ).toLowerCase().contains(itemSearch.toLowerCase());
+            }).toList();
+
+            final mediaQuery = MediaQuery.of(context);
+            return AnimatedPadding(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOut,
+              padding: EdgeInsets.only(bottom: mediaQuery.viewInsets.bottom),
+              child: SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxHeight: mediaQuery.size.height * 0.85,
                     ),
-                    const SizedBox(height: 16),
-                    if (allItems.isEmpty)
-                      const Text('No items available')
-                    else
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: allItems
-                            .map(
-                              (item) => FilterChip(
-                                label: Text(item),
-                                selected: localSelections.contains(item),
-                                onSelected: (_) {
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          style: theme.textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        if (enableModeToggle) ...[
+                          Row(
+                            children: [
+                              Text(
+                                modeLabel,
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                              const Spacer(),
+                              IconButton.outlined(
+                                onPressed: () {
                                   setModalState(() {
-                                    if (localSelections.contains(item)) {
-                                      localSelections.remove(item);
-                                    } else {
-                                      localSelections.add(item);
+                                    mode = mode == FilterMatchMode.and
+                                        ? FilterMatchMode.or
+                                        : FilterMatchMode.and;
+                                  });
+                                },
+                                icon: const Icon(Icons.sync_alt),
+                                tooltip: 'Toggle AND/OR',
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                mode.name.toUpperCase(),
+                                style: theme.textTheme.labelLarge,
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                        TextField(
+                          decoration: const InputDecoration(
+                            hintText: 'Search items...',
+                            prefixIcon: Icon(Icons.search, size: 18),
+                            isDense: true,
+                          ),
+                          onChanged: (value) {
+                            setModalState(() {
+                              itemSearch = value;
+                            });
+                          },
+                        ),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            Chip(
+                              avatar: const Icon(Icons.add, size: 14),
+                              label: const Text('Include'),
+                              visualDensity: VisualDensity.compact,
+                              backgroundColor:
+                                  theme.colorScheme.primaryContainer,
+                            ),
+                            Chip(
+                              avatar: const Icon(Icons.remove, size: 14),
+                              label: const Text('Exclude'),
+                              visualDensity: VisualDensity.compact,
+                              backgroundColor: theme.colorScheme.errorContainer,
+                            ),
+                            Chip(
+                              avatar: const Icon(
+                                Icons.radio_button_unchecked,
+                                size: 14,
+                              ),
+                              label: const Text('Off'),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                          ],
+                        ),
+                        if (allItems.isEmpty) ...[
+                          const SizedBox(height: 16),
+                          const Text('No items available'),
+                        ] else ...[
+                          const SizedBox(height: 16),
+                          Flexible(
+                            child: SingleChildScrollView(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Tap each item to cycle include/exclude/off',
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  if (visibleItems.isEmpty)
+                                    const Text('No items match your search')
+                                  else
+                                    Wrap(
+                                      spacing: 8,
+                                      runSpacing: 8,
+                                      children: visibleItems.map((item) {
+                                        final state = stateFor(item);
+                                        final isActive =
+                                            state != _FilterSelectionState.none;
+                                        final avatar = switch (state) {
+                                          _FilterSelectionState.include =>
+                                            const Icon(Icons.add, size: 14),
+                                          _FilterSelectionState.exclude =>
+                                            const Icon(Icons.remove, size: 14),
+                                          _FilterSelectionState.none =>
+                                            const Icon(
+                                              Icons.radio_button_unchecked,
+                                              size: 14,
+                                            ),
+                                        };
+                                        final selectedColor = switch (state) {
+                                          _FilterSelectionState.include =>
+                                            theme.colorScheme.primaryContainer,
+                                          _FilterSelectionState.exclude =>
+                                            theme.colorScheme.errorContainer,
+                                          _FilterSelectionState.none =>
+                                            theme
+                                                .colorScheme
+                                                .surfaceContainerHighest,
+                                        };
+                                        return FilterChip(
+                                          avatar: avatar,
+                                          label: Text(itemLabel(item)),
+                                          selected: isActive,
+                                          selectedColor: selectedColor,
+                                          onSelected: (_) {
+                                            setModalState(() {
+                                              cycleState(item);
+                                            });
+                                          },
+                                        );
+                                      }).toList(),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 16),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          alignment: WrapAlignment.end,
+                          children: [
+                            TextButton(
+                              onPressed: () {
+                                setModalState(() {
+                                  include.clear();
+                                  exclude.clear();
+                                });
+                              },
+                              child: const Text('Clear'),
+                            ),
+                            if (visibleItems.isNotEmpty)
+                              TextButton(
+                                onPressed: () {
+                                  setModalState(() {
+                                    for (final item in visibleItems) {
+                                      include.add(item);
+                                      exclude.remove(item);
                                     }
                                   });
                                 },
+                                child: const Text('Include visible'),
                               ),
-                            )
-                            .toList(),
-                      ),
-                    const SizedBox(height: 24),
-                    Row(
-                      children: [
-                        TextButton(
-                          onPressed: () => setModalState(localSelections.clear),
-                          child: const Text('Clear All'),
-                        ),
-                        const Spacer(),
-                        FilledButton(
-                          onPressed: () =>
-                              Navigator.pop(context, localSelections),
-                          child: const Text('Apply'),
+                            if (visibleItems.isNotEmpty)
+                              TextButton(
+                                onPressed: () {
+                                  setModalState(() {
+                                    for (final item in visibleItems) {
+                                      exclude.add(item);
+                                      include.remove(item);
+                                    }
+                                  });
+                                },
+                                child: const Text('Exclude visible'),
+                              ),
+                            FilledButton(
+                              onPressed: () => Navigator.pop(
+                                context,
+                                _IncludeExcludeSelection<T>(
+                                  include: Set<T>.from(include),
+                                  exclude: Set<T>.from(exclude),
+                                  mode: mode,
+                                ),
+                              ),
+                              child: const Text('Apply'),
+                            ),
+                          ],
                         ),
                       ],
                     ),
-                  ],
+                  ),
                 ),
               ),
             );
@@ -667,32 +895,62 @@ class _HomePageState extends State<HomePage>
       },
     );
 
-    if (applied != null) onApply(applied);
+    if (applied != null) {
+      onApply(applied.include, applied.exclude, applied.mode);
+    }
   }
 }
+
+class _IncludeExcludeSelection<T> {
+  const _IncludeExcludeSelection({
+    required this.include,
+    required this.exclude,
+    required this.mode,
+  });
+
+  final Set<T> include;
+  final Set<T> exclude;
+  final FilterMatchMode mode;
+}
+
+enum _FilterSelectionState { none, include, exclude }
 
 class _SearchAndFiltersRow extends StatefulWidget {
   const _SearchAndFiltersRow({
     required this.searchQuery,
+    required this.parsedQuery,
     required this.onSearchChanged,
-    required this.selectedTags,
-    required this.selectedProjects,
+    required this.includeTags,
+    required this.excludeTags,
+    required this.tagMatchMode,
+    required this.includeProjects,
+    required this.excludeProjects,
+    required this.projectMatchMode,
     required this.onOpenTags,
     required this.onOpenProjects,
     required this.onClear,
     required this.onRemoveTag,
+    required this.onRemoveExcludedTag,
     required this.onRemoveProject,
+    required this.onRemoveExcludedProject,
   });
 
   final String searchQuery;
+  final TaskQuery parsedQuery;
   final ValueChanged<String> onSearchChanged;
-  final Set<String> selectedTags;
-  final Set<String> selectedProjects;
+  final Set<String> includeTags;
+  final Set<String> excludeTags;
+  final FilterMatchMode tagMatchMode;
+  final Set<String> includeProjects;
+  final Set<String> excludeProjects;
+  final FilterMatchMode projectMatchMode;
   final VoidCallback onOpenTags;
   final VoidCallback onOpenProjects;
   final VoidCallback onClear;
   final ValueChanged<String> onRemoveTag;
+  final ValueChanged<String> onRemoveExcludedTag;
   final ValueChanged<String> onRemoveProject;
+  final ValueChanged<String> onRemoveExcludedProject;
 
   @override
   State<_SearchAndFiltersRow> createState() => _SearchAndFiltersRowState();
@@ -700,6 +958,21 @@ class _SearchAndFiltersRow extends StatefulWidget {
 
 class _SearchAndFiltersRowState extends State<_SearchAndFiltersRow> {
   late TextEditingController _searchController;
+
+  static const List<String> _queryExamples = [
+    '+home project:work',
+    'status:completed',
+    'due.before:today',
+    '+ready -blocked',
+  ];
+
+  void _applyExample(String suggestion) {
+    _searchController.text = suggestion;
+    _searchController.selection = TextSelection.collapsed(
+      offset: suggestion.length,
+    );
+    widget.onSearchChanged(suggestion);
+  }
 
   @override
   void initState() {
@@ -727,12 +1000,16 @@ class _SearchAndFiltersRowState extends State<_SearchAndFiltersRow> {
   @override
   Widget build(BuildContext context) {
     final hasFilters =
-        widget.selectedTags.isNotEmpty || widget.selectedProjects.isNotEmpty;
+        widget.includeTags.isNotEmpty ||
+        widget.excludeTags.isNotEmpty ||
+        widget.includeProjects.isNotEmpty ||
+        widget.excludeProjects.isNotEmpty;
     final theme = Theme.of(context);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           TextField(
             controller: _searchController,
@@ -751,53 +1028,127 @@ class _SearchAndFiltersRowState extends State<_SearchAndFiltersRow> {
                     ),
             ),
           ),
+          if (_searchController.text.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: widget.parsedQuery.hasErrors
+                    ? theme.colorScheme.errorContainer
+                    : theme.colorScheme.secondaryContainer.withValues(
+                        alpha: 0.7,
+                      ),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    widget.parsedQuery.hasErrors
+                        ? Icons.error_outline
+                        : Icons.rule,
+                    size: 16,
+                    color: widget.parsedQuery.hasErrors
+                        ? theme.colorScheme.onErrorContainer
+                        : theme.colorScheme.onSecondaryContainer,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      widget.parsedQuery.issues.isNotEmpty
+                          ? widget.parsedQuery.issues.first.message
+                          : widget.parsedQuery.isAdvanced
+                          ? 'Advanced query parsed (${widget.parsedQuery.termCount} terms)'
+                          : 'Text search mode',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: widget.parsedQuery.hasErrors
+                            ? theme.colorScheme.onErrorContainer
+                            : theme.colorScheme.onSecondaryContainer,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ] else ...[
+            const SizedBox(height: 8),
+            Text(
+              'Examples',
+              style: theme.textTheme.labelLarge?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: _queryExamples.map((example) {
+                return ActionChip(
+                  label: Text(example),
+                  onPressed: () => _applyExample(example),
+                );
+              }).toList(),
+            ),
+          ],
           const SizedBox(height: 12),
-          Row(
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               ActionChip(
                 avatar: const Icon(Icons.label_outline, size: 16),
                 label: Text(
-                  widget.selectedTags.isEmpty
+                  widget.includeTags.isEmpty && widget.excludeTags.isEmpty
                       ? 'Tags'
-                      : 'Tags (${widget.selectedTags.length})',
+                      : 'Tags (${widget.includeTags.length}/${widget.excludeTags.length})',
                 ),
                 onPressed: widget.onOpenTags,
-                backgroundColor: widget.selectedTags.isNotEmpty
+                backgroundColor:
+                    widget.includeTags.isNotEmpty ||
+                        widget.excludeTags.isNotEmpty
                     ? theme.colorScheme.primaryContainer
                     : null,
-                side: BorderSide(
-                  color: widget.selectedTags.isNotEmpty
-                      ? Colors.transparent
-                      : theme.colorScheme.outline.withValues(alpha: 0.3),
-                ),
               ),
-              const SizedBox(width: 8),
+              Icon(
+                widget.tagMatchMode == FilterMatchMode.and
+                    ? Icons.call_merge
+                    : Icons.alt_route,
+                size: 16,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
               ActionChip(
                 avatar: const Icon(Icons.folder_outlined, size: 16),
                 label: Text(
-                  widget.selectedProjects.isEmpty
+                  widget.includeProjects.isEmpty &&
+                          widget.excludeProjects.isEmpty
                       ? 'Projects'
-                      : 'Projects (${widget.selectedProjects.length})',
+                      : 'Projects (${widget.includeProjects.length}/${widget.excludeProjects.length})',
                 ),
                 onPressed: widget.onOpenProjects,
-                backgroundColor: widget.selectedProjects.isNotEmpty
+                backgroundColor:
+                    widget.includeProjects.isNotEmpty ||
+                        widget.excludeProjects.isNotEmpty
                     ? theme.colorScheme.primaryContainer
                     : null,
-                side: BorderSide(
-                  color: widget.selectedProjects.isNotEmpty
-                      ? Colors.transparent
-                      : theme.colorScheme.outline.withValues(alpha: 0.3),
-                ),
               ),
-              if (hasFilters || _searchController.text.isNotEmpty) ...[
-                const Spacer(),
-                TextButton(
-                  onPressed: widget.onClear,
-                  child: const Text('Clear'),
-                ),
-              ],
+              Icon(
+                widget.projectMatchMode == FilterMatchMode.and
+                    ? Icons.call_merge
+                    : Icons.alt_route,
+                size: 16,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ],
           ),
+          if (hasFilters || _searchController.text.isNotEmpty)
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: widget.onClear,
+                child: const Text('Clear'),
+              ),
+            ),
           if (hasFilters) ...[
             const SizedBox(height: 8),
             Align(
@@ -806,16 +1157,25 @@ class _SearchAndFiltersRowState extends State<_SearchAndFiltersRow> {
                 spacing: 6,
                 runSpacing: 6,
                 children: [
-                  ...widget.selectedTags.map(
+                  ...widget.includeTags.map(
                     (tag) => InputChip(
+                      avatar: const Icon(Icons.add, size: 14),
                       label: Text(tag, style: const TextStyle(fontSize: 12)),
                       onDeleted: () => widget.onRemoveTag(tag),
                       visualDensity: VisualDensity.compact,
                     ),
                   ),
-                  ...widget.selectedProjects.map(
+                  ...widget.excludeTags.map(
+                    (tag) => InputChip(
+                      avatar: const Icon(Icons.remove, size: 14),
+                      label: Text(tag, style: const TextStyle(fontSize: 12)),
+                      onDeleted: () => widget.onRemoveExcludedTag(tag),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ),
+                  ...widget.includeProjects.map(
                     (project) => InputChip(
-                      avatar: const Icon(Icons.folder_outlined, size: 14),
+                      avatar: const Icon(Icons.add, size: 14),
                       label: Text(
                         project,
                         style: const TextStyle(fontSize: 12),
@@ -824,10 +1184,65 @@ class _SearchAndFiltersRowState extends State<_SearchAndFiltersRow> {
                       visualDensity: VisualDensity.compact,
                     ),
                   ),
+                  ...widget.excludeProjects.map(
+                    (project) => InputChip(
+                      avatar: const Icon(Icons.folder_outlined, size: 14),
+                      label: Text(
+                        project,
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      onDeleted: () => widget.onRemoveExcludedProject(project),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ),
                 ],
               ),
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+class _BroadResultsBar extends StatelessWidget {
+  const _BroadResultsBar({
+    required this.resultCount,
+    required this.isSearchVisible,
+    required this.onToggleSearch,
+  });
+
+  final int resultCount;
+  final bool isSearchVisible;
+  final VoidCallback onToggleSearch;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      child: Row(
+        children: [
+          Icon(Icons.filter_list, size: 18, color: theme.colorScheme.primary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Matching tasks ($resultCount)',
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w600,
+                color: theme.colorScheme.onSurface,
+              ),
+            ),
+          ),
+          IconButton(
+            onPressed: onToggleSearch,
+            icon: Icon(isSearchVisible ? Icons.search_off : Icons.search),
+            color: isSearchVisible
+                ? theme.colorScheme.primary
+                : theme.colorScheme.onSurfaceVariant,
+            tooltip: 'Toggle query',
+          ),
         ],
       ),
     );
@@ -959,7 +1374,7 @@ class _QueueViewAndSearchToggleRow extends StatelessWidget {
             color: isSearchVisible || filterCount > 0
                 ? theme.colorScheme.primary
                 : theme.colorScheme.onSurfaceVariant,
-            tooltip: 'Toggle Search & Filters',
+            tooltip: 'Toggle query',
           ),
         ],
       ),
