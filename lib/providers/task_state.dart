@@ -5,7 +5,10 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taskdroid/models/filter_tab.dart';
 import 'package:taskdroid/models/profile.dart';
+import 'package:taskdroid/models/task_virtual_flags.dart';
 import 'package:taskdroid/services/calendar_service.dart';
+import 'package:taskdroid/services/task_filter_evaluator.dart';
+import 'package:taskdroid/services/task_query_language.dart';
 import 'package:taskdroid/src/rust/api.dart';
 import 'package:taskdroid/src/rust/frb_generated.dart';
 import 'package:uuid/uuid.dart';
@@ -16,6 +19,7 @@ class TaskState extends ChangeNotifier {
   static const String _recurrenceLimitUdaKey = 'taskdroid.recurrence.limit';
 
   TaskManager? _taskManager;
+  List<TaskView> _allTasks = [];
   List<TaskView> _readyTasks = [];
   List<TaskView> _waitingTasks = [];
   List<TaskView> _scheduledTasks = [];
@@ -25,8 +29,12 @@ class TaskState extends ChangeNotifier {
   String? _error;
 
   String _searchQuery = '';
-  Set<String> _selectedTags = {};
-  Set<String> _selectedProjects = {};
+  Set<String>? _includeTags;
+  Set<String>? _excludeTags;
+  FilterMatchMode? _tagMatchMode;
+  Set<String>? _includeProjects;
+  Set<String>? _excludeProjects;
+  FilterMatchMode? _projectMatchMode;
 
   List<FilterTab> _filterTabs = [];
   String? _currentTabId;
@@ -36,11 +44,14 @@ class TaskState extends ChangeNotifier {
   Timer? _saveTabTimer;
   Timer? _debounceFilterTimer;
   TaskQueueView _queueView = TaskQueueView.ready;
+  bool _needsRefreshAfterCurrentLoad = false;
 
   final Set<String> _selectedTaskUuids = {};
 
   List<TaskView>? _cachedFilteredTasks;
   String? _lastFilterKey;
+  String? _lastParsedSearchQuery;
+  TaskQuery? _parsedSearchQuery;
 
   TaskManager? get taskManager => _taskManager;
   List<TaskView> get pendingTasks => _readyTasks;
@@ -52,12 +63,27 @@ class TaskState extends ChangeNotifier {
   bool get isSyncing => _isSyncing;
   String? get error => _error;
   String get searchQuery => _searchQuery;
-  Set<String> get selectedTags => _selectedTags;
-  Set<String> get selectedProjects => _selectedProjects;
+  TaskQuery get parsedSearchQuery => _getParsedSearchQuery();
+  Set<String> get selectedTags => includeTags;
+  Set<String> get selectedProjects => includeProjects;
+  Set<String> get includeTags => _includeTags ?? <String>{};
+  Set<String> get excludeTags => _excludeTags ?? <String>{};
+  FilterMatchMode get tagMatchMode => _tagMatchMode ?? FilterMatchMode.and;
+  Set<String> get includeProjects => _includeProjects ?? <String>{};
+  Set<String> get excludeProjects => _excludeProjects ?? <String>{};
+  FilterMatchMode get projectMatchMode =>
+      _projectMatchMode ?? FilterMatchMode.and;
   List<FilterTab> get filterTabs => _filterTabs;
   String? get currentProfileId => _currentProfileId;
   Set<String> get selectedTaskUuids => _selectedTaskUuids;
   bool get isSelectionMode => _selectedTaskUuids.isNotEmpty;
+
+  /// True when the query explicitly requests non-pending statuses such as
+  /// status:completed, +COMPLETED, or status:deleted.
+  bool get usesExplicitStatusScope =>
+      _getParsedSearchQuery().usesExplicitStatusScope;
+  List<TaskView> get displaySourceTasks =>
+      usesExplicitStatusScope ? _allTasks : _sourceTasksForCurrentView();
 
   final CalendarService _calendarService = CalendarService();
 
@@ -72,7 +98,7 @@ class TaskState extends ChangeNotifier {
 
   Set<String> get allTags {
     final tags = <String>{};
-    for (final task in _sourceTasksForCurrentView()) {
+    for (final task in _allTasks) {
       tags.addAll(task.tags);
     }
     return tags;
@@ -80,7 +106,7 @@ class TaskState extends ChangeNotifier {
 
   Set<String> get allProjects {
     final projects = <String>{};
-    for (final task in _sourceTasksForCurrentView()) {
+    for (final task in _allTasks) {
       if (task.project != null && task.project!.isNotEmpty) {
         projects.add(task.project!);
       }
@@ -131,7 +157,10 @@ class TaskState extends ChangeNotifier {
 
   Future<void> refreshPendingTasks() async {
     if (_taskManager == null) return;
-    if (_isLoading) return;
+    if (_isLoading) {
+      _needsRefreshAfterCurrentLoad = true;
+      return;
+    }
 
     _isLoading = true;
     notifyListeners();
@@ -141,7 +170,7 @@ class TaskState extends ChangeNotifier {
         status: null,
         project: null,
         tags: [],
-        searchTerm: null,
+        searchTerm: _searchQuery.trim().isEmpty ? null : _searchQuery.trim(),
         offset: BigInt.from(0),
         limit: BigInt.from(5000),
       );
@@ -151,9 +180,11 @@ class TaskState extends ChangeNotifier {
       final ready = <TaskView>[];
       final waiting = <TaskView>[];
       final scheduled = <TaskView>[];
+      _allTasks = result.tasks;
       _taskByUuid.clear();
 
       for (final task in result.tasks) {
+        _taskByUuid[task.uuid] = task;
         if (task.status == TaskStatus.pending) {
           if (_isWaitingTask(task, now)) {
             waiting.add(task);
@@ -162,7 +193,6 @@ class TaskState extends ChangeNotifier {
           } else {
             ready.add(task);
           }
-          _taskByUuid[task.uuid] = task;
         }
       }
 
@@ -180,71 +210,75 @@ class TaskState extends ChangeNotifier {
     } finally {
       _isLoading = false;
       notifyListeners();
+      if (_needsRefreshAfterCurrentLoad) {
+        _needsRefreshAfterCurrentLoad = false;
+        unawaited(refreshPendingTasks());
+      }
     }
   }
 
   bool _isWaitingTask(TaskView task, DateTime nowUtc) {
-    if (task.isWaiting) {
-      return true;
-    }
-    final wait = task.wait;
-    if (wait == null || wait.isEmpty) {
-      return false;
-    }
-
-    final parsed = DateTime.tryParse(wait);
-    if (parsed == null) {
-      return false;
-    }
-
-    return parsed.toUtc().isAfter(nowUtc);
+    return task.isWaitingAt(nowUtc);
   }
 
   bool _isScheduledForFuture(TaskView task, DateTime nowUtc) {
-    final scheduled = task.scheduled;
-    if (scheduled == null || scheduled.isEmpty) {
-      return false;
-    }
-    final parsed = DateTime.tryParse(scheduled);
-    if (parsed == null) {
-      return false;
-    }
-    return parsed.toUtc().isAfter(nowUtc);
+    return task.isScheduledForFuture(nowUtc);
   }
 
   List<TaskView> get filteredTasks {
+    final parsedQuery = _getParsedSearchQuery();
     final filterKey =
-        '${_queueView.name}:$_searchQuery:${_selectedTags.join(',')}:${_selectedProjects.join(',')}';
+        '${_queueView.name}:$_searchQuery:${_sortedStrings(includeTags).join(',')}:${_sortedStrings(excludeTags).join(',')}:${tagMatchMode.name}:${_sortedStrings(includeProjects).join(',')}:${_sortedStrings(excludeProjects).join(',')}:${projectMatchMode.name}:${parsedQuery.usesExplicitStatusScope ? 'explicit-status' : 'queue'}';
 
     if (_cachedFilteredTasks != null && _lastFilterKey == filterKey) {
       return _cachedFilteredTasks!;
     }
 
-    var filtered = _sourceTasksForCurrentView();
-
-    if (_searchQuery.isNotEmpty) {
-      final query = _searchQuery.toLowerCase();
-      filtered = filtered.where((task) {
-        return task.description.toLowerCase().contains(query) ||
-            (task.project?.toLowerCase().contains(query) ?? false);
-      }).toList();
-    }
-
-    if (_selectedTags.isNotEmpty) {
-      filtered = filtered.where((task) {
-        return _selectedTags.every((tag) => task.tags.contains(tag));
-      }).toList();
-    }
-
-    if (_selectedProjects.isNotEmpty) {
-      filtered = filtered.where((task) {
-        return task.project != null && _selectedProjects.contains(task.project);
-      }).toList();
-    }
+    final source = displaySourceTasks;
+    final now = DateTime.now().toUtc();
+    var filtered = source
+        .where((task) => _matchesTaskFilters(task, now))
+        .toList();
 
     _cachedFilteredTasks = filtered;
     _lastFilterKey = filterKey;
     return filtered;
+  }
+
+  TaskQuery _getParsedSearchQuery() {
+    final query = _searchQuery;
+    if (_parsedSearchQuery != null && _lastParsedSearchQuery == query) {
+      return _parsedSearchQuery!;
+    }
+    final parsed = parseTaskQuery(query, DateTime.now().toUtc());
+    _lastParsedSearchQuery = query;
+    _parsedSearchQuery = parsed;
+    return parsed;
+  }
+
+  List<String> _sortedStrings(Iterable<String> values) {
+    final sorted = values.toList()..sort();
+    return sorted;
+  }
+
+  bool _matchesTaskFilters(TaskView task, DateTime nowUtc) {
+    return matchesTaskFilter(
+      task,
+      TaskFilterCriteria(
+        includeTags: includeTags,
+        excludeTags: excludeTags,
+        tagMatchMode: tagMatchMode,
+        includeProjects: includeProjects,
+        excludeProjects: excludeProjects,
+        projectMatchMode: projectMatchMode,
+        includeStatuses: const <TaskStatus>{},
+        excludeStatuses: const <TaskStatus>{},
+        includeFlags: const <TaskVirtualFlag>{},
+        excludeFlags: const <TaskVirtualFlag>{},
+        flagMatchMode: FilterMatchMode.and,
+      ),
+      nowUtc,
+    );
   }
 
   void setQueueView(TaskQueueView view) {
@@ -500,14 +534,13 @@ class TaskState extends ChangeNotifier {
 
         final tab = currentTab;
         if (tab != null) {
-          _searchQuery = tab.searchQuery;
-          _selectedTags = Set.from(tab.selectedTags);
-          _selectedProjects = Set.from(tab.selectedProjects);
+          _applyTab(tab);
         }
       } else {
         final defaultTab = FilterTab(id: const Uuid().v4(), name: 'All Tasks');
         _filterTabs = [defaultTab];
         _currentTabId = defaultTab.id;
+        _applyTab(defaultTab);
         await _saveFilterTabs(profileId);
       }
       _cachedFilteredTasks = null;
@@ -529,28 +562,106 @@ class TaskState extends ChangeNotifier {
 
   void setSearchQuery(String query) {
     _searchQuery = query;
+    _lastParsedSearchQuery = null;
+    _parsedSearchQuery = null;
     _cachedFilteredTasks = null;
+    _scheduleQueryRefresh();
     _scheduleTabUpdate();
     notifyListeners();
   }
 
+  void _scheduleQueryRefresh() {
+    _debounceFilterTimer?.cancel();
+    _debounceFilterTimer = Timer(const Duration(milliseconds: 250), () {
+      unawaited(refreshPendingTasks());
+    });
+  }
+
   void toggleTag(String tag) {
-    if (_selectedTags.contains(tag)) {
-      _selectedTags.remove(tag);
+    final include = Set<String>.from(_includeTags ?? <String>{});
+    if (include.contains(tag)) {
+      include.remove(tag);
     } else {
-      _selectedTags.add(tag);
+      include.add(tag);
     }
+    _includeTags = include;
+    _excludeTags ??= <String>{};
+    _tagMatchMode ??= FilterMatchMode.and;
     _cachedFilteredTasks = null;
     _scheduleTabUpdate();
     notifyListeners();
   }
 
   void toggleProject(String project) {
-    if (_selectedProjects.contains(project)) {
-      _selectedProjects.remove(project);
+    final include = Set<String>.from(_includeProjects ?? <String>{});
+    if (include.contains(project)) {
+      include.remove(project);
     } else {
-      _selectedProjects.add(project);
+      include.add(project);
     }
+    _includeProjects = include;
+    _excludeProjects ??= <String>{};
+    _projectMatchMode ??= FilterMatchMode.and;
+    _cachedFilteredTasks = null;
+    _scheduleTabUpdate();
+    notifyListeners();
+  }
+
+  void toggleExcludedTag(String tag) {
+    final exclude = Set<String>.from(_excludeTags ?? <String>{});
+    final include = Set<String>.from(_includeTags ?? <String>{});
+    if (exclude.contains(tag)) {
+      exclude.remove(tag);
+    } else {
+      exclude.add(tag);
+      include.remove(tag);
+    }
+    _excludeTags = exclude;
+    _includeTags = include;
+    _tagMatchMode ??= FilterMatchMode.and;
+    _cachedFilteredTasks = null;
+    _scheduleTabUpdate();
+    notifyListeners();
+  }
+
+  void toggleExcludedProject(String project) {
+    final exclude = Set<String>.from(_excludeProjects ?? <String>{});
+    final include = Set<String>.from(_includeProjects ?? <String>{});
+    if (exclude.contains(project)) {
+      exclude.remove(project);
+    } else {
+      exclude.add(project);
+      include.remove(project);
+    }
+    _excludeProjects = exclude;
+    _includeProjects = include;
+    _projectMatchMode ??= FilterMatchMode.and;
+    _cachedFilteredTasks = null;
+    _scheduleTabUpdate();
+    notifyListeners();
+  }
+
+  void setTagFilters({
+    required Set<String> include,
+    required Set<String> exclude,
+    required FilterMatchMode mode,
+  }) {
+    _includeTags = include;
+    _excludeTags = exclude;
+    _tagMatchMode = mode;
+    _cachedFilteredTasks = null;
+    _scheduleTabUpdate();
+    notifyListeners();
+  }
+
+  void setProjectFilters({
+    required Set<String> include,
+    required Set<String> exclude,
+    required FilterMatchMode mode,
+  }) {
+    _includeProjects = include;
+    _excludeProjects = exclude;
+    _projectMatchMode = mode;
     _cachedFilteredTasks = null;
     _scheduleTabUpdate();
     notifyListeners();
@@ -558,9 +669,16 @@ class TaskState extends ChangeNotifier {
 
   void clearFilters() {
     _searchQuery = '';
-    _selectedTags.clear();
-    _selectedProjects.clear();
+    _lastParsedSearchQuery = null;
+    _parsedSearchQuery = null;
+    _includeTags = <String>{};
+    _excludeTags = <String>{};
+    _tagMatchMode = FilterMatchMode.and;
+    _includeProjects = <String>{};
+    _excludeProjects = <String>{};
+    _projectMatchMode = FilterMatchMode.and;
     _cachedFilteredTasks = null;
+    _scheduleQueryRefresh();
     _scheduleTabUpdate();
     notifyListeners();
   }
@@ -572,11 +690,10 @@ class TaskState extends ChangeNotifier {
     _currentTabId = tabId;
     final tab = currentTab;
     if (tab != null) {
-      _searchQuery = tab.searchQuery;
-      _selectedTags = Set.from(tab.selectedTags);
-      _selectedProjects = Set.from(tab.selectedProjects);
+      _applyTab(tab);
     }
     _cachedFilteredTasks = null;
+    _scheduleQueryRefresh();
     notifyListeners();
   }
 
@@ -585,8 +702,18 @@ class TaskState extends ChangeNotifier {
       id: const Uuid().v4(),
       name: name,
       searchQuery: _searchQuery,
-      selectedTags: Set.from(_selectedTags),
-      selectedProjects: Set.from(_selectedProjects),
+      selectedTags: const <String>{},
+      selectedProjects: const <String>{},
+      includeTags: _includeTags == null ? null : Set.from(_includeTags!),
+      excludeTags: _excludeTags == null ? null : Set.from(_excludeTags!),
+      tagMatchMode: _tagMatchMode,
+      includeProjects: _includeProjects == null
+          ? null
+          : Set.from(_includeProjects!),
+      excludeProjects: _excludeProjects == null
+          ? null
+          : Set.from(_excludeProjects!),
+      projectMatchMode: _projectMatchMode,
     );
 
     _filterTabs = [
@@ -633,14 +760,106 @@ class TaskState extends ChangeNotifier {
     final idx = _filterTabs.indexWhere((t) => t.id == _currentTabId);
     if (idx != -1) {
       final newList = List<FilterTab>.from(_filterTabs);
-      newList[idx] = newList[idx].copyWith(
+      final current = newList[idx];
+      newList[idx] = FilterTab(
+        id: current.id,
+        name: current.name,
         searchQuery: _searchQuery,
-        selectedTags: _selectedTags,
-        selectedProjects: _selectedProjects,
+        selectedTags: const <String>{},
+        selectedProjects: const <String>{},
+        includeTags: _includeTags,
+        excludeTags: _excludeTags,
+        tagMatchMode: _tagMatchMode,
+        includeProjects: _includeProjects,
+        excludeProjects: _excludeProjects,
+        projectMatchMode: _projectMatchMode,
       );
       _filterTabs = newList; // immutable update
       await _saveFilterTabs(_currentProfileId!);
     }
+  }
+
+  void _applyTab(FilterTab tab) {
+    _searchQuery = _migratedSearchQuery(tab);
+    _lastParsedSearchQuery = null;
+    _parsedSearchQuery = null;
+    _includeTags = tab.includeTags == null
+        ? Set.from(tab.selectedTags)
+        : Set.from(tab.includeTags!);
+    _excludeTags = tab.excludeTags == null ? null : Set.from(tab.excludeTags!);
+    _tagMatchMode = tab.tagMatchMode ?? FilterMatchMode.and;
+    _includeProjects = tab.includeProjects == null
+        ? Set.from(tab.selectedProjects)
+        : Set.from(tab.includeProjects!);
+    _excludeProjects = tab.excludeProjects == null
+        ? null
+        : Set.from(tab.excludeProjects!);
+    _projectMatchMode = tab.projectMatchMode ?? FilterMatchMode.and;
+  }
+
+  String _migratedSearchQuery(FilterTab tab) {
+    final fragments = <String>[];
+    final search = tab.searchQuery.trim();
+    if (search.isNotEmpty) fragments.add(search);
+
+    final includeStatuses = _decodeStatuses(tab.includeStatuses) ?? {};
+    final includeStatusFragments = includeStatuses
+        .map((status) => 'status:${status.name}')
+        .toList();
+    if (includeStatusFragments.length > 1) {
+      fragments.add('(${includeStatusFragments.join(' or ')})');
+    } else {
+      fragments.addAll(includeStatusFragments);
+    }
+
+    final excludeStatuses = _decodeStatuses(tab.excludeStatuses) ?? {};
+    fragments.addAll(excludeStatuses.map((status) => '-status:${status.name}'));
+
+    final includeFlags = _decodeFlags(tab.includeFlags) ?? {};
+    final includeFlagFragments = includeFlags
+        .map((flag) => '+${_flagQueryToken(flag)}')
+        .toList();
+    if (includeFlagFragments.length > 1 &&
+        tab.flagMatchMode == FilterMatchMode.or) {
+      fragments.add('(${includeFlagFragments.join(' or ')})');
+    } else {
+      fragments.addAll(includeFlagFragments);
+    }
+
+    final excludeFlags = _decodeFlags(tab.excludeFlags) ?? {};
+    fragments.addAll(excludeFlags.map((flag) => '-${_flagQueryToken(flag)}'));
+
+    return fragments.join(' ');
+  }
+
+  String _flagQueryToken(TaskVirtualFlag flag) => flag.name.toLowerCase();
+
+  Set<TaskStatus>? _decodeStatuses(Set<String>? raw) {
+    if (raw == null) return null;
+    final parsed = <TaskStatus>{};
+    for (final value in raw) {
+      for (final status in TaskStatus.values) {
+        if (status.name == value) {
+          parsed.add(status);
+          break;
+        }
+      }
+    }
+    return parsed;
+  }
+
+  Set<TaskVirtualFlag>? _decodeFlags(Set<String>? raw) {
+    if (raw == null) return null;
+    final parsed = <TaskVirtualFlag>{};
+    for (final value in raw) {
+      for (final flag in TaskVirtualFlag.values) {
+        if (flag.name == value) {
+          parsed.add(flag);
+          break;
+        }
+      }
+    }
+    return parsed;
   }
 
   String getTaskDescription(String uuid) {
@@ -675,11 +894,14 @@ class TaskState extends ChangeNotifier {
     _readyTasks = [];
     _waitingTasks = [];
     _scheduledTasks = [];
+    _allTasks = [];
     _taskByUuid.clear();
     _queueView = TaskQueueView.ready;
     _currentProfileId = null;
     _recurrenceLimit = 1;
     _currentTabId = null;
+    _lastParsedSearchQuery = null;
+    _parsedSearchQuery = null;
     notifyListeners();
   }
 

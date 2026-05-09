@@ -173,6 +173,40 @@ void main() {
       expect(allTasks.length, 3);
     });
 
+    testWidgets('Search term +COMPLETED returns completed tasks', (
+      WidgetTester tester,
+    ) async {
+      await manager.addTask(
+        params: CreateTaskParams(
+          description: "Open task",
+          status: TaskStatus.pending,
+          tags: [],
+          udas: [],
+        ),
+      );
+      final completedUuid = await manager.addTask(
+        params: CreateTaskParams(
+          description: "Completed task",
+          status: TaskStatus.completed,
+          tags: [],
+          udas: [],
+        ),
+      );
+
+      final result = await manager.listTasks(
+        filter: TaskFilter(
+          searchTerm: "+COMPLETED",
+          tags: [],
+          offset: BigInt.zero,
+          limit: BigInt.from(100),
+        ),
+      );
+
+      expect(result.tasks.length, 1);
+      expect(result.tasks.first.uuid, completedUuid);
+      expect(result.tasks.first.status, TaskStatus.completed);
+    });
+
     testWidgets('Update task description', (WidgetTester tester) async {
       final uuid = await manager.addTask(
         params: CreateTaskParams(
