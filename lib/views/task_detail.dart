@@ -6,6 +6,8 @@ import 'package:taskdroid/providers/task_state.dart';
 import 'package:taskdroid/src/rust/api.dart';
 import 'package:taskdroid/widgets/task_editor.dart';
 
+enum SeriesScope { single, entire }
+
 class TaskDetailPage extends StatelessWidget {
   final String taskUuid;
 
@@ -543,12 +545,20 @@ class _TaskDetailContent extends StatelessWidget {
     }
 
     if (task.recurrence != null) {
+      final instanceNumber = task.recurrenceIndex == null
+          ? ''
+          : '#${task.recurrenceIndex! + BigInt.one}';
+      final recurrenceKind = task.isRecurringTemplate
+          ? 'Series template'
+          : task.isRecurringInstance
+          ? 'Instance $instanceNumber'
+          : 'Repeating task';
       rows.add(
         _buildDetailRow(
           context,
           Icons.loop,
           'Recurrence',
-          task.recurrence!,
+          '$recurrenceKind - ${task.recurrence!}',
           colorScheme.onSurfaceVariant,
         ),
       );
@@ -1032,7 +1042,19 @@ class _TaskDetailContent extends StatelessWidget {
 
   Future<void> _markDone(BuildContext context) async {
     final taskState = context.read<TaskState>();
-    final error = await taskState.markTaskDone(task.uuid);
+    if (task.isRecurringTemplate) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Recurring series templates cannot be completed. Delete the series or set Repeat Until instead.',
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    final error = await taskState.markTaskDoneSingle(task.uuid);
     if (!context.mounted) return;
 
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -1053,7 +1075,7 @@ class _TaskDetailContent extends StatelessWidget {
     final taskState = context.read<TaskState>();
 
     if (task.isRecurringTemplate || task.isRecurringInstance) {
-      final scope = await showModalBottomSheet<String>(
+      final scope = await showModalBottomSheet<SeriesScope>(
         context: context,
         builder: (ctx) => Column(
           mainAxisSize: MainAxisSize.min,
@@ -1062,20 +1084,20 @@ class _TaskDetailContent extends StatelessWidget {
               leading: const Icon(Icons.delete_outline),
               title: const Text('This task only'),
               subtitle: const Text('Delete only this single task'),
-              onTap: () => Navigator.pop(ctx, 'single'),
+              onTap: () => Navigator.pop(ctx, SeriesScope.single),
             ),
             ListTile(
               leading: const Icon(Icons.delete_sweep),
               title: const Text('Entire series'),
               subtitle: const Text('Delete this task and all its instances'),
-              onTap: () => Navigator.pop(ctx, 'series'),
+              onTap: () => Navigator.pop(ctx, SeriesScope.entire),
             ),
           ],
         ),
       );
 
       if (scope == null) return;
-      if (scope == 'series') {
+      if (scope == SeriesScope.entire) {
         final error = await taskState.deleteTaskSeries(task.uuid);
         if (!context.mounted) return;
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -1113,17 +1135,78 @@ class _TaskDetailContent extends StatelessWidget {
 
   Future<void> _showEditDialog(BuildContext context) async {
     final taskState = Provider.of<TaskState>(context, listen: false);
-    final result = await showTaskEditorSheet(context, originalTask: task);
+    var editTarget = task;
+    var mode = TaskEditorMode.normal;
+    var updateSeries = false;
+
+    if (task.isRecurringTemplate) {
+      mode = TaskEditorMode.series;
+      updateSeries = true;
+    } else if (task.isRecurringInstance) {
+      final scope = await _chooseRecurringEditScope(context);
+      if (scope == null || !context.mounted) return;
+      updateSeries = scope == SeriesScope.entire;
+      mode = updateSeries ? TaskEditorMode.series : TaskEditorMode.instance;
+
+      if (updateSeries) {
+        final parentUuid = task.parentUuid;
+        if (parentUuid == null) return;
+        final parent = await taskState.getTaskByUuid(parentUuid);
+        if (!context.mounted) return;
+        if (parent == null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Recurring series template not found'),
+            ),
+          );
+          return;
+        }
+        editTarget = parent;
+      }
+    }
+
+    final result = await showTaskEditorSheet(
+      context,
+      originalTask: editTarget,
+      mode: mode,
+    );
 
     if (result != null && context.mounted) {
-      final updateParams = _createUpdateParams(task, result);
-      final error = await taskState.updateTask(task.uuid, updateParams);
+      final updateParams = _createUpdateParams(editTarget, result);
+      final error = updateSeries
+          ? await taskState.updateTaskSeries(task.uuid, updateParams)
+          : await taskState.updateTask(editTarget.uuid, updateParams);
       if (error != null && context.mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(error)));
       }
     }
+  }
+
+  Future<SeriesScope?> _chooseRecurringEditScope(BuildContext context) {
+    return showModalBottomSheet<SeriesScope>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.event_available_outlined),
+              title: const Text('This instance only'),
+              subtitle: const Text('Change just this occurrence'),
+              onTap: () => Navigator.pop(ctx, SeriesScope.single),
+            ),
+            ListTile(
+              leading: const Icon(Icons.all_inclusive),
+              title: const Text('Entire series'),
+              subtitle: const Text('Update the template and pending instances'),
+              onTap: () => Navigator.pop(ctx, SeriesScope.entire),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   UpdateTaskParams _createUpdateParams(

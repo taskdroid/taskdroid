@@ -7,9 +7,12 @@ import 'package:taskdroid/widgets/tag_input.dart';
 import 'package:taskdroid/widgets/task_selector.dart';
 import 'package:taskdroid/widgets/uda_editor.dart';
 
+enum TaskEditorMode { normal, instance, series }
+
 Future<TaskEditorResult?> showTaskEditorSheet(
   BuildContext context, {
   TaskView? originalTask,
+  TaskEditorMode mode = TaskEditorMode.normal,
 }) {
   return showModalBottomSheet<TaskEditorResult>(
     context: context,
@@ -20,7 +23,7 @@ Future<TaskEditorResult?> showTaskEditorSheet(
     ),
     builder: (ctx) => FractionallySizedBox(
       heightFactor: 0.92,
-      child: TaskEditor(originalTask: originalTask),
+      child: TaskEditor(originalTask: originalTask, mode: mode),
     ),
   );
 }
@@ -55,8 +58,13 @@ class TaskEditorResult {
 
 class TaskEditor extends StatefulWidget {
   final TaskView? originalTask;
+  final TaskEditorMode mode;
 
-  const TaskEditor({super.key, this.originalTask});
+  const TaskEditor({
+    super.key,
+    this.originalTask,
+    this.mode = TaskEditorMode.normal,
+  });
 
   @override
   State<TaskEditor> createState() => _TaskEditorState();
@@ -249,6 +257,11 @@ class _TaskEditorState extends State<TaskEditor>
     final theme = Theme.of(context);
     final taskState = context.read<TaskState>();
     final isEditing = widget.originalTask != null;
+    final title = switch (widget.mode) {
+      TaskEditorMode.instance => 'Edit Instance',
+      TaskEditorMode.series => 'Edit Series',
+      TaskEditorMode.normal => isEditing ? 'Edit Task' : 'New Task',
+    };
 
     return Column(
       children: [
@@ -267,12 +280,17 @@ class _TaskEditorState extends State<TaskEditor>
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
           child: Text(
-            isEditing ? 'Edit Task' : 'New Task',
+            title,
             style: theme.textTheme.titleLarge?.copyWith(
               fontWeight: FontWeight.bold,
             ),
           ),
         ),
+        if (widget.mode != TaskEditorMode.normal)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
+            child: _buildModeBanner(theme),
+          ),
 
         // Tabs
         TabBar(
@@ -353,6 +371,46 @@ class _TaskEditorState extends State<TaskEditor>
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildModeBanner(ThemeData theme) {
+    final isSeries = widget.mode == TaskEditorMode.series;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: isSeries
+            ? theme.colorScheme.primaryContainer.withValues(alpha: 0.55)
+            : theme.colorScheme.secondaryContainer.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color:
+              (isSeries
+                      ? theme.colorScheme.primary
+                      : theme.colorScheme.secondary)
+                  .withValues(alpha: 0.25),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            isSeries ? Icons.all_inclusive : Icons.event_repeat,
+            size: 20,
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              isSeries
+                  ? 'Changes apply to the series template and pending generated instances. Completed history stays unchanged.'
+                  : 'You are editing one occurrence only. The recurring series will continue.',
+              style: theme.textTheme.bodySmall?.copyWith(height: 1.35),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -580,58 +638,94 @@ class _TaskEditorState extends State<TaskEditor>
             ),
           ),
           const SizedBox(height: 16),
-          TextFormField(
-            controller: _recurrenceController,
-            decoration: const InputDecoration(
-              labelText: 'Repeat Rule',
-              prefixIcon: Icon(Icons.loop),
-              hintText: 'e.g. daily, weekly, monthly',
+          if (widget.mode == TaskEditorMode.instance) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerHighest.withValues(
+                  alpha: 0.5,
+                ),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(
+                  color: theme.colorScheme.outline.withValues(alpha: 0.2),
+                ),
+              ),
+              child: Text(
+                'Repeat settings belong to the series. Choose "Edit series" to change the rule or end date.',
+                style: theme.textTheme.bodyMedium,
+              ),
             ),
-            onChanged: (value) => setState(() => _recurrence = value.trim()),
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: ['daily', 'weekly', 'biweekly', 'monthly', 'weekdays']
-                .map(
-                  (preset) => ActionChip(
-                    label: Text(preset),
-                    backgroundColor: _recurrence == preset
-                        ? theme.colorScheme.primaryContainer
-                        : null,
-                    side: BorderSide(
-                      color: _recurrence == preset
-                          ? Colors.transparent
-                          : theme.colorScheme.outline.withValues(alpha: 0.3),
-                    ),
-                    onPressed: () {
-                      setState(() {
-                        _recurrence = preset;
-                        _recurrenceController.text = preset;
-                      });
-                    },
-                  ),
-                )
-                .toList(),
-          ),
-          const SizedBox(height: 16),
+          ] else ...[
+            TextFormField(
+              controller: _recurrenceController,
+              decoration: const InputDecoration(
+                labelText: 'Repeat Rule',
+                prefixIcon: Icon(Icons.loop),
+                hintText: 'e.g. daily, weekly, monthly',
+                helperText:
+                    'Also supports shorthand/ISO forms: 5d, 2w, 3mo, P1M, PT6H',
+              ),
+              onChanged: (value) => setState(() => _recurrence = value.trim()),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children:
+                  [
+                        'daily',
+                        'weekly',
+                        'biweekly',
+                        '5d',
+                        '2w',
+                        '3mo',
+                        'monthly',
+                        'quarterly',
+                        'yearly',
+                        'weekdays',
+                      ]
+                      .map(
+                        (preset) => ActionChip(
+                          label: Text(preset),
+                          backgroundColor: _recurrence == preset
+                              ? theme.colorScheme.primaryContainer
+                              : null,
+                          side: BorderSide(
+                            color: _recurrence == preset
+                                ? Colors.transparent
+                                : theme.colorScheme.outline.withValues(
+                                    alpha: 0.3,
+                                  ),
+                          ),
+                          onPressed: () {
+                            setState(() {
+                              _recurrence = preset;
+                              _recurrenceController.text = preset;
+                            });
+                          },
+                        ),
+                      )
+                      .toList(),
+            ),
+            const SizedBox(height: 16),
 
-          _buildDateField(
-            label: 'Repeat Until',
-            icon: Icons.event_busy,
-            controller: _untilDateController,
-            onTap: () => _pickDateTime(_selectedUntilDate, (d) {
-              setState(() {
-                _selectedUntilDate = d;
-                _untilDateController.text = _formatDate(d!);
-              });
-            }),
-            onClear: () => setState(() {
-              _selectedUntilDate = null;
-              _untilDateController.clear();
-            }),
-          ),
+            _buildDateField(
+              label: 'Repeat Until',
+              icon: Icons.event_busy,
+              controller: _untilDateController,
+              onTap: () => _pickDateTime(_selectedUntilDate, (d) {
+                setState(() {
+                  _selectedUntilDate = d;
+                  _untilDateController.text = _formatDate(d!);
+                });
+              }),
+              onClear: () => setState(() {
+                _selectedUntilDate = null;
+                _untilDateController.clear();
+              }),
+            ),
+          ],
           const SizedBox(height: 32),
 
           Row(

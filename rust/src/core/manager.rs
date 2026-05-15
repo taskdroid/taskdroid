@@ -21,7 +21,6 @@ use tracing::{debug, info, warn};
 
 const WORKER_QUEUE_CAPACITY: usize = 256;
 const DEFAULT_RECURRENCE_LIMIT: usize = 1;
-const RECUR_LIMIT_UDA_KEY: &str = "taskdroid.recurrence.limit";
 
 type WorkerReply<T> = oneshot::Sender<Result<T>>;
 
@@ -47,6 +46,10 @@ enum WorkerCommand {
     AddTask {
         params: CreateTaskParams,
         reply: WorkerReply<String>,
+    },
+    SetRecurrenceLimit {
+        limit: usize,
+        reply: WorkerReply<()>,
     },
     UpdateTask {
         uuid_str: String,
@@ -111,6 +114,7 @@ impl WorkerCommand {
             Self::CountUndoPoints { .. } => "count_undo_points",
             Self::Undo { .. } => "undo",
             Self::AddTask { .. } => "add_task",
+            Self::SetRecurrenceLimit { .. } => "set_recurrence_limit",
             Self::UpdateTask { .. } => "update_task",
             Self::DeleteTasks { .. } => "delete_tasks",
             Self::DeleteTaskSingle { .. } => "delete_task_single",
@@ -137,11 +141,27 @@ impl WorkerCommand {
 
 struct WorkerState {
     replica: Option<Replica>,
+    recurrence_limit: usize,
 }
 
 impl WorkerState {
     fn new() -> Self {
-        Self { replica: None }
+        Self {
+            replica: None,
+            recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
+        }
+    }
+
+    fn normalized_recurrence_limit(limit: usize) -> usize {
+        limit.min(128)
+    }
+
+    fn set_recurrence_limit(&mut self, limit: usize) -> Result<()> {
+        self.recurrence_limit = Self::normalized_recurrence_limit(limit);
+        if let Some(replica) = self.replica.as_mut() {
+            Self::apply_maintenance(replica, self.recurrence_limit)?;
+        }
+        Ok(())
     }
 
     fn replica_mut(&mut self) -> Result<&mut Replica> {
@@ -173,8 +193,9 @@ impl WorkerState {
 
     fn query_tasks(&mut self, query: Query) -> Result<QueryResult> {
         let started_at = std::time::Instant::now();
+        let recurrence_limit = self.recurrence_limit;
         let replica = self.replica_mut()?;
-        Self::apply_maintenance(replica)?;
+        Self::apply_maintenance(replica, recurrence_limit)?;
         let all_tasks: Vec<_> = replica
             .all_tasks()
             .map_err(|e| TaskError::storage(format!("Failed to fetch tasks: {e}")))?
@@ -217,8 +238,9 @@ impl WorkerState {
 
     fn get_task(&mut self, uuid_str: String) -> Result<TaskSnapshot> {
         let uuid = parse_uuid(&uuid_str)?;
+        let recurrence_limit = self.recurrence_limit;
         let replica = self.replica_mut()?;
-        Self::apply_maintenance(replica)?;
+        Self::apply_maintenance(replica, recurrence_limit)?;
         let task = replica
             .get_task(uuid)
             .map_err(|e| TaskError::storage(format!("Failed to fetch task: {e}")))?
@@ -248,6 +270,7 @@ impl WorkerState {
     }
 
     fn add_task(&mut self, params: CreateTaskParams) -> Result<String> {
+        let recurrence_limit = self.recurrence_limit;
         let replica = self.replica_mut()?;
         let mut ops = Operations::new();
         ops.push(Operation::UndoPoint);
@@ -312,7 +335,10 @@ impl WorkerState {
                 .map_err(|e| TaskError::invalid_input(format!("Invalid wait date: {e}")))?;
         }
         if let Some(scheduled) = params.scheduled {
-            task.set_value("sched", parse_date_opt_str_strict(&scheduled)?, &mut ops)
+            let sched_value = parse_date_opt_str_strict(&scheduled)?;
+            task.set_value("scheduled", sched_value, &mut ops)
+                .map_err(|e| TaskError::invalid_input(format!("Invalid scheduled date: {e}")))?;
+            task.set_value("sched", None::<String>, &mut ops)
                 .map_err(|e| TaskError::invalid_input(format!("Invalid scheduled date: {e}")))?;
         }
         task.set_value("recur", recurrence, &mut ops)
@@ -329,18 +355,22 @@ impl WorkerState {
         replica
             .commit_operations(ops)
             .map_err(|e| TaskError::storage(format!("Failed to save task: {e}")))?;
-        Self::apply_maintenance(replica)?;
+        Self::apply_maintenance(replica, recurrence_limit)?;
         Ok(uuid.to_string())
     }
 
     fn update_task(&mut self, uuid_str: String, params: UpdateTaskParams) -> Result<()> {
         let uuid = parse_uuid(&uuid_str)?;
+        let recurrence_limit = self.recurrence_limit;
         let replica = self.replica_mut()?;
         let original_task = replica
             .get_task(uuid)
             .map_err(|e| TaskError::storage(format!("Failed to fetch task: {e}")))?
             .ok_or_else(|| TaskError::not_found(format!("Task `{uuid_str}` not found")))?;
         let original_status = original_task.get_status();
+        let original_had_recur = original_task.get_value("recur").is_some();
+        let original_had_due = original_task.get_due().is_some();
+        let original_parent = original_task.get_value("parent").map(str::to_string);
         let mut ops = Operations::new();
         ops.push(Operation::UndoPoint);
         let mut task = original_task;
@@ -413,11 +443,23 @@ impl WorkerState {
                 .map_err(|e| TaskError::invalid_input(format!("Invalid wait date: {e}")))?;
         }
         if let Some(scheduled) = params.scheduled {
-            task.set_value("sched", parse_date_opt_str_strict(&scheduled)?, &mut ops)
+            let sched_value = parse_date_opt_str_strict(&scheduled)?;
+            task.set_value("scheduled", sched_value, &mut ops)
+                .map_err(|e| TaskError::invalid_input(format!("Invalid scheduled date: {e}")))?;
+            task.set_value("sched", None::<String>, &mut ops)
                 .map_err(|e| TaskError::invalid_input(format!("Invalid scheduled date: {e}")))?;
         }
         if let Some(recurrence) = params.recurrence {
             let normalized = normalize_recurrence(Some(recurrence));
+
+            if original_had_recur
+                && normalized.is_none()
+                && (original_status == TcStatus::Recurring || original_parent.is_some())
+            {
+                return Err(TaskError::invalid_input(
+                    "You cannot remove the recurrence from a recurring task",
+                ));
+            }
 
             if normalized.is_none()
                 && matches!(params.status, Some(super::models::TaskStatus::Recurring))
@@ -465,19 +507,16 @@ impl WorkerState {
             ));
         }
 
+        if original_had_recur && original_had_due && task.get_due().is_none() {
+            return Err(TaskError::invalid_input(
+                "You cannot remove the due date from a recurring task",
+            ));
+        }
+
         if original_status == TcStatus::Recurring && task.get_status() != TcStatus::Recurring {
-            if task.get_value("recur").is_some() {
-                task.set_value("recur", None::<String>, &mut ops)
-                    .map_err(|e| {
-                        TaskError::invalid_input(format!("Failed to clear recurrence rule: {e}"))
-                    })?;
-            }
-            if task.get_value("mask").is_some() {
-                task.set_value("mask", None::<String>, &mut ops)
-                    .map_err(|e| {
-                        TaskError::invalid_input(format!("Failed to clear recurrence mask: {e}"))
-                    })?;
-            }
+            return Err(TaskError::invalid_input(
+                "Use delete series or set a repeat-until date to stop a recurring series",
+            ));
         }
 
         if let Some(until) = params.until {
@@ -535,7 +574,7 @@ impl WorkerState {
             }
         }
 
-        Self::apply_maintenance(replica)?;
+        Self::apply_maintenance(replica, recurrence_limit)?;
         Ok(())
     }
 
@@ -553,7 +592,12 @@ impl WorkerState {
 
         let template = match replica.get_task(template_uuid) {
             Ok(Some(t)) => t,
-            Ok(None) => return Err(TaskError::not_found(format!("Task `{}` not found", uuid_str))),
+            Ok(None) => {
+                return Err(TaskError::not_found(format!(
+                    "Task `{}` not found",
+                    uuid_str
+                )));
+            }
             Err(e) => return Err(TaskError::storage(format!("Failed to fetch task: {}", e))),
         };
 
@@ -564,7 +608,12 @@ impl WorkerState {
             template
                 .get_value("parent")
                 .map(|s| s.to_string())
-                .ok_or_else(|| TaskError::invalid_input(format!("Task `{}` is not part of a recurring series", uuid_str)))?
+                .ok_or_else(|| {
+                    TaskError::invalid_input(format!(
+                        "Task `{}` is not part of a recurring series",
+                        uuid_str
+                    ))
+                })?
         };
 
         let all_tasks = replica
@@ -603,50 +652,10 @@ impl WorkerState {
     }
 
     fn done_task_series(&mut self, uuid_str: String) -> Result<()> {
-        let template_uuid = parse_uuid(&uuid_str)?;
-        let replica = self.replica_mut()?;
-
-        let template = match replica.get_task(template_uuid) {
-            Ok(Some(t)) => t,
-            Ok(None) => return Err(TaskError::not_found(format!("Task `{}` not found", uuid_str))),
-            Err(e) => return Err(TaskError::storage(format!("Failed to fetch task: {}", e))),
-        };
-
-        let is_template = template.get_status() == TcStatus::Recurring;
-        let series_uuid = if is_template {
-            template_uuid.to_string()
-        } else {
-            template
-                .get_value("parent")
-                .map(|s| s.to_string())
-                .ok_or_else(|| TaskError::invalid_input(format!("Task `{}` is not part of a recurring series", uuid_str)))?
-        };
-
-        let all_tasks = replica
-            .all_tasks()
-            .map_err(|e| TaskError::storage(format!("Failed to fetch tasks: {}", e)))?;
-
-        let mut uuids_to_complete = vec![series_uuid.clone()];
-
-        let child_uuids: Vec<String> = all_tasks
-            .iter()
-            .filter_map(|(_, task)| {
-                let parent = task.get_value("parent").map(|s| s.to_string());
-                if parent.as_deref() == Some(series_uuid.as_str()) {
-                    Some(task.get_uuid().to_string())
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        uuids_to_complete.extend(child_uuids);
-
-        if !uuids_to_complete.is_empty() {
-            self.set_status_for_tasks(uuids_to_complete, None, true)?;
-        }
-
-        Ok(())
+        let _ = parse_uuid(&uuid_str)?;
+        Err(TaskError::invalid_input(
+            "Recurring series cannot be completed as a group; complete individual instances, delete the series, or set a repeat-until date",
+        ))
     }
 
     fn start_tasks(&mut self, uuid_strs: Vec<String>) -> Result<()> {
@@ -659,6 +668,7 @@ impl WorkerState {
 
     fn sync(&mut self, url: String, client_id: String, encryption_secret: String) -> Result<()> {
         let started_at = std::time::Instant::now();
+        let recurrence_limit = self.recurrence_limit;
         let config = ServerConfig::Remote {
             url,
             client_id: parse_uuid(&client_id)?,
@@ -674,7 +684,7 @@ impl WorkerState {
         replica
             .rebuild_working_set(true)
             .map_err(|e| TaskError::storage(format!("Failed to rebuild working set: {e}")))?;
-        Self::apply_maintenance(replica)?;
+        Self::apply_maintenance(replica, recurrence_limit)?;
         info!(
             command = "sync",
             elapsed_ms = started_at.elapsed().as_millis(),
@@ -684,8 +694,9 @@ impl WorkerState {
     }
 
     fn export_tasks(&mut self, include_deleted: bool) -> Result<String> {
+        let recurrence_limit = self.recurrence_limit;
         let replica = self.replica_mut()?;
-        Self::apply_maintenance(replica)?;
+        Self::apply_maintenance(replica, recurrence_limit)?;
         let snapshots = replica
             .all_tasks()
             .map_err(|e| TaskError::storage(format!("Failed to fetch tasks: {e}")))?
@@ -701,6 +712,7 @@ impl WorkerState {
         let snapshots: Vec<TaskSnapshot> = serde_json::from_str(&json_data)
             .map_err(|e| TaskError::invalid_input(format!("Invalid import payload: {e}")))?;
         let count = snapshots.len();
+        let recurrence_limit = self.recurrence_limit;
         let replica = self.replica_mut()?;
         let mut ops = Operations::new();
         ops.push(Operation::UndoPoint);
@@ -747,7 +759,9 @@ impl WorkerState {
                 .map_err(|e| TaskError::invalid_input(format!("Invalid due date: {e}")))?;
             task.set_wait(wait, &mut ops)
                 .map_err(|e| TaskError::invalid_input(format!("Invalid wait date: {e}")))?;
-            task.set_value("sched", scheduled, &mut ops)
+            task.set_value("scheduled", scheduled, &mut ops)
+                .map_err(|e| TaskError::invalid_input(format!("Invalid scheduled date: {e}")))?;
+            task.set_value("sched", None::<String>, &mut ops)
                 .map_err(|e| TaskError::invalid_input(format!("Invalid scheduled date: {e}")))?;
             task.set_value("end", end, &mut ops)
                 .map_err(|e| TaskError::invalid_input(format!("Invalid end date: {e}")))?;
@@ -765,9 +779,10 @@ impl WorkerState {
                     .map_err(|e| TaskError::invalid_input(format!("Invalid priority: {e}")))?;
             }
             if let Some(start_val) = &core.start {
-                task.set_value("start", Some(start_val.clone()), &mut ops).map_err(|e| {
-                    TaskError::conflict(format!("Failed to activate imported task: {e}"))
-                })?;
+                task.set_value("start", Some(start_val.clone()), &mut ops)
+                    .map_err(|e| {
+                        TaskError::conflict(format!("Failed to activate imported task: {e}"))
+                    })?;
             }
             for tag in core.tags {
                 match Tag::from_str(&tag) {
@@ -818,13 +833,13 @@ impl WorkerState {
         replica
             .commit_operations(ops)
             .map_err(|e| TaskError::storage(format!("Failed to import tasks: {e}")))?;
-        Self::apply_maintenance(replica)?;
+        Self::apply_maintenance(replica, recurrence_limit)?;
         Ok(count)
     }
 
-    fn apply_maintenance(replica: &mut Replica) -> Result<()> {
+    fn apply_maintenance(replica: &mut Replica, recurrence_limit: usize) -> Result<()> {
         Self::expire_until_tasks(replica)?;
-        Self::ensure_recurrence_instances(replica)
+        Self::ensure_recurrence_instances(replica, recurrence_limit)
     }
 
     fn expire_until_tasks(replica: &mut Replica) -> Result<()> {
@@ -864,7 +879,7 @@ impl WorkerState {
         Ok(())
     }
 
-    fn ensure_recurrence_instances(replica: &mut Replica) -> Result<()> {
+    fn ensure_recurrence_instances(replica: &mut Replica, recurrence_limit: usize) -> Result<()> {
         let all_tasks = replica
             .all_tasks()
             .map_err(|e| TaskError::storage(format!("Failed to fetch tasks: {e}")))?;
@@ -903,7 +918,7 @@ impl WorkerState {
             let until = template
                 .get_value("until")
                 .and_then(|value| parse_iso8601(value).ok());
-            let recurrence_limit_uda = get_uda_value(&template, RECUR_LIMIT_UDA_KEY);
+            let series_expired = until.map(|limit| limit <= now).unwrap_or(false);
 
             let mut indexed_children: Vec<(usize, taskchampion::Task)> = all_tasks
                 .iter()
@@ -921,13 +936,12 @@ impl WorkerState {
 
             indexed_children.sort_by_key(|(index, _)| *index);
 
-            let recurrence_limit = template_recurrence_limit(&template);
-
-            while indexed_children
-                .iter()
-                .filter(|(_, child)| child.get_status() == TcStatus::Pending)
-                .count()
-                < recurrence_limit
+            while !series_expired
+                && indexed_children
+                    .iter()
+                    .filter(|(_, child)| child.get_status() == TcStatus::Pending)
+                    .count()
+                    < recurrence_limit
             {
                 let next_index = indexed_children
                     .iter()
@@ -967,16 +981,22 @@ impl WorkerState {
                         child.set_due(Some(due), &mut ops).map_err(|e| {
                             TaskError::invalid_input(format!("Invalid recurring due date: {e}"))
                         })?;
-                        if let Some(wait) = template.get_wait() {
+                        if let Some(wait) = template
+                            .get_wait()
+                            .and_then(|wait| shift_date_by_due_offset(template_due, wait, due))
+                        {
                             child.set_wait(Some(wait), &mut ops).map_err(|e| {
                                 TaskError::invalid_input(format!(
                                     "Failed to propagate wait to recurring child: {e}"
                                 ))
                             })?;
                         }
-                        if let Some(sched) = template.get_value("sched") {
+                        if let Some(sched) = template
+                            .get_value("scheduled")
+                            .or_else(|| template.get_value("sched"))
+                        {
                             child
-                                .set_value("sched", Some(sched.to_string()), &mut ops)
+                                .set_value("scheduled", Some(sched.to_string()), &mut ops)
                                 .map_err(|e| {
                                     TaskError::invalid_input(format!(
                                         "Failed to propagate scheduled date to recurring child: {e}"
@@ -1042,19 +1062,6 @@ impl WorkerState {
                                 );
                             }
                         }
-                        if let Some(limit) = recurrence_limit_uda.as_deref() {
-                            child
-                                .set_user_defined_attribute(
-                                    RECUR_LIMIT_UDA_KEY.to_string(),
-                                    limit.to_string(),
-                                    &mut ops,
-                                )
-                                .map_err(|e| {
-                                    TaskError::invalid_input(format!(
-                                        "Invalid recurrence limit attribute: {e}"
-                                    ))
-                                })?;
-                        }
                         indexed_children.push((next_index, child));
                         indexed_children.sort_by_key(|(index, _)| *index);
                         changed = true;
@@ -1069,13 +1076,34 @@ impl WorkerState {
                 .map(|(_, child)| recurrence_mask_char(child))
                 .collect::<String>();
             let existing_mask = template.get_value("mask").map(str::to_string);
-            let next_mask = if mask.is_empty() { None } else { Some(mask) };
+            let next_mask = if mask.is_empty() {
+                None
+            } else {
+                Some(mask.clone())
+            };
             if existing_mask != next_mask {
                 template
                     .set_value("mask", next_mask, &mut ops)
                     .map_err(|e| {
                         TaskError::invalid_input(format!("Invalid recurrence mask: {e}"))
                     })?;
+                changed = true;
+            }
+
+            // Reap exhausted template: if `until` has passed and no pending or
+            // waiting children remain, delete the template (matching Taskwarrior).
+            if series_expired && !mask.contains('-') && !mask.contains('W') {
+                let uuid = template.get_uuid();
+                template
+                    .set_status(TcStatus::Deleted, &mut ops)
+                    .map_err(|e| {
+                        TaskError::conflict(format!(
+                            "Failed to reap exhausted series `{uuid}`: {e}"
+                        ))
+                    })?;
+                template.set_modified(now, &mut ops).map_err(|e| {
+                    TaskError::storage(format!("Failed to set modified for reaped series: {e}"))
+                })?;
                 changed = true;
             }
         }
@@ -1095,6 +1123,7 @@ impl WorkerState {
         status: Option<TcStatus>,
         complete: bool,
     ) -> Result<()> {
+        let recurrence_limit = self.recurrence_limit;
         let replica = self.replica_mut()?;
         let mut ops = Operations::new();
         ops.push(Operation::UndoPoint);
@@ -1106,6 +1135,14 @@ impl WorkerState {
                         .map_err(|e| TaskError::storage(format!("Failed to fetch task: {e}")))?
                     {
                         if complete {
+                            if task.get_status() == TcStatus::Recurring {
+                                warn!(
+                                    command = "set_status_for_tasks",
+                                    uuid = %uuid_str,
+                                    "skipped completing recurring template; use delete or until instead"
+                                );
+                                continue;
+                            }
                             task.done(&mut ops).map_err(|e| {
                                 TaskError::conflict(format!(
                                     "Failed to complete task `{uuid_str}`: {e}"
@@ -1131,11 +1168,12 @@ impl WorkerState {
         replica
             .commit_operations(ops)
             .map_err(|e| TaskError::storage(format!("Failed to commit task updates: {e}")))?;
-        Self::apply_maintenance(replica)?;
+        Self::apply_maintenance(replica, recurrence_limit)?;
         Ok(())
     }
 
     fn set_active_for_tasks(&mut self, uuid_strs: Vec<String>, active: bool) -> Result<()> {
+        let recurrence_limit = self.recurrence_limit;
         let replica = self.replica_mut()?;
         let mut ops = Operations::new();
         ops.push(Operation::UndoPoint);
@@ -1172,20 +1210,9 @@ impl WorkerState {
         replica
             .commit_operations(ops)
             .map_err(|e| TaskError::storage(format!("Failed to commit task updates: {e}")))?;
-        Self::apply_maintenance(replica)?;
+        Self::apply_maintenance(replica, recurrence_limit)?;
         Ok(())
     }
-}
-
-fn get_uda_value(task: &taskchampion::Task, key: &str) -> Option<String> {
-    task.get_user_defined_attributes()
-        .find_map(|(uda_key, uda_value)| {
-            if uda_key == key {
-                Some(uda_value.to_string())
-            } else {
-                None
-            }
-        })
 }
 
 fn error_chain(error: &dyn StdError) -> String {
@@ -1244,13 +1271,6 @@ fn explicit_tag_names(task: &taskchampion::Task) -> HashSet<String> {
         .collect()
 }
 
-fn template_recurrence_limit(template: &taskchampion::Task) -> usize {
-    get_uda_value(template, RECUR_LIMIT_UDA_KEY)
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(DEFAULT_RECURRENCE_LIMIT)
-}
-
 fn propagate_template_fields_to_children(
     replica: &mut Replica,
     template_uuid: Uuid,
@@ -1274,9 +1294,11 @@ fn propagate_template_fields_to_children(
     let template_priority = template.get_priority().to_string();
     let template_recur = template.get_value("recur").map(str::to_string);
     let template_until = template.get_value("until").map(str::to_string);
-    let template_sched = template.get_value("sched").map(str::to_string);
+    let template_sched = template
+        .get_value("scheduled")
+        .or_else(|| template.get_value("sched"))
+        .map(str::to_string);
     let template_wait = template.get_wait();
-    let template_limit = get_uda_value(&template, RECUR_LIMIT_UDA_KEY);
     let template_tags = explicit_tag_names(&template);
 
     let all_tasks = replica
@@ -1334,39 +1356,30 @@ fn propagate_template_fields_to_children(
             changed = true;
         }
 
-        if child.get_value("sched") != template_sched.as_deref() {
+        let child_sched = child
+            .get_value("scheduled")
+            .or_else(|| child.get_value("sched"));
+        if child_sched != template_sched.as_deref() {
             child
-                .set_value("sched", template_sched.clone(), &mut ops)
+                .set_value("scheduled", template_sched.clone(), &mut ops)
+                .map_err(|e| TaskError::conflict(format!("Failed to propagate scheduled: {e}")))?;
+            child
+                .set_value("sched", None::<String>, &mut ops)
                 .map_err(|e| TaskError::conflict(format!("Failed to propagate scheduled: {e}")))?;
             changed = true;
         }
 
-        if child.get_wait() != template_wait {
-            child
-                .set_wait(template_wait, &mut ops)
-                .map_err(|e| TaskError::conflict(format!("Failed to propagate wait: {e}")))?;
-            changed = true;
-        }
-
-        let child_limit = get_uda_value(&child, RECUR_LIMIT_UDA_KEY);
-        if child_limit != template_limit {
-            if let Some(limit) = template_limit.as_deref() {
-                child
-                    .set_user_defined_attribute(
-                        RECUR_LIMIT_UDA_KEY.to_string(),
-                        limit.to_string(),
-                        &mut ops,
-                    )
-                    .map_err(|e| {
-                        TaskError::conflict(format!("Failed to propagate recurrence limit: {e}"))
-                    })?;
-            } else {
-                child
-                    .remove_user_defined_attribute(RECUR_LIMIT_UDA_KEY.to_string(), &mut ops)
-                    .map_err(|e| {
-                        TaskError::conflict(format!("Failed to clear recurrence limit: {e}"))
-                    })?;
+        let child_wait = match (template_wait, template.get_due(), child.get_due()) {
+            (Some(wait), Some(template_due), Some(child_due)) => {
+                shift_date_by_due_offset(template_due, wait, child_due)
             }
+            _ => template_wait,
+        };
+
+        if child.get_wait() != child_wait {
+            child
+                .set_wait(child_wait, &mut ops)
+                .map_err(|e| TaskError::conflict(format!("Failed to propagate wait: {e}")))?;
             changed = true;
         }
 
@@ -1557,24 +1570,26 @@ fn normalize_recurrence(value: Option<String>) -> Option<String> {
 
 #[derive(Clone, Copy)]
 enum RecurrenceRule {
-    Daily,
-    Weekly,
-    Biweekly,
-    Monthly,
-    Yearly,
+    Seconds(i64),
+    Days(i64),
+    Months(i32),
     Weekdays,
 }
 
 fn parse_recurrence_rule(value: &str) -> Option<RecurrenceRule> {
     let normalized = value.trim().to_lowercase();
     match normalized.as_str() {
-        "daily" => Some(RecurrenceRule::Daily),
-        "weekly" => Some(RecurrenceRule::Weekly),
-        "biweekly" | "bi-weekly" => Some(RecurrenceRule::Biweekly),
-        "monthly" => Some(RecurrenceRule::Monthly),
-        "yearly" | "annual" => Some(RecurrenceRule::Yearly),
+        "daily" => Some(RecurrenceRule::Days(1)),
+        "weekly" => Some(RecurrenceRule::Days(7)),
+        "biweekly" | "bi-weekly" => Some(RecurrenceRule::Days(14)),
+        "monthly" => Some(RecurrenceRule::Months(1)),
+        "bimonthly" => Some(RecurrenceRule::Months(2)),
+        "quarterly" => Some(RecurrenceRule::Months(3)),
+        "semiannual" | "semi-annually" | "semiannually" => Some(RecurrenceRule::Months(6)),
+        "yearly" | "annual" | "annually" => Some(RecurrenceRule::Months(12)),
+        "biannual" | "biyearly" => Some(RecurrenceRule::Months(24)),
         "weekdays" | "weekday" => Some(RecurrenceRule::Weekdays),
-        _ => None,
+        _ => parse_period_recurrence(&normalized),
     }
 }
 
@@ -1584,11 +1599,13 @@ fn due_for_index(
     index: usize,
 ) -> Option<DateTime<Utc>> {
     match recurrence {
-        RecurrenceRule::Daily => Some(base_due + Duration::days(index as i64)),
-        RecurrenceRule::Weekly => Some(base_due + Duration::weeks(index as i64)),
-        RecurrenceRule::Biweekly => Some(base_due + Duration::weeks((index * 2) as i64)),
-        RecurrenceRule::Monthly => add_months(base_due, index as i32),
-        RecurrenceRule::Yearly => add_months(base_due, (index as i32) * 12),
+        RecurrenceRule::Seconds(seconds) => {
+            Some(base_due + Duration::seconds(seconds.checked_mul(index as i64)?))
+        }
+        RecurrenceRule::Days(days) => {
+            Some(base_due + Duration::days(days.checked_mul(index as i64)?))
+        }
+        RecurrenceRule::Months(months) => add_months(base_due, months.checked_mul(index as i32)?),
         RecurrenceRule::Weekdays => {
             if index == 0 {
                 return Some(base_due);
@@ -1604,6 +1621,69 @@ fn due_for_index(
             }
             Some(current)
         }
+    }
+}
+
+fn parse_period_recurrence(value: &str) -> Option<RecurrenceRule> {
+    if value.len() < 2 {
+        return None;
+    }
+
+    if let Some(time_period) = value.strip_prefix("pt") {
+        return parse_time_period_recurrence(time_period);
+    }
+
+    let period = value.strip_prefix('p').unwrap_or(value);
+    if let Some(amount) = period.strip_suffix("mo") {
+        let amount = amount.parse::<i64>().ok()?;
+        return positive_months(amount);
+    }
+
+    let (amount, unit) = period.split_at(period.len() - 1);
+    let amount = amount.parse::<i64>().ok()?;
+    if amount <= 0 {
+        return None;
+    }
+
+    match unit {
+        "d" => Some(RecurrenceRule::Days(amount)),
+        "w" => Some(RecurrenceRule::Days(amount.checked_mul(7)?)),
+        // Taskwarrior recurrence shorthand uses `m` for months here.
+        "m" => positive_months(amount),
+        "y" => amount
+            .checked_mul(12)
+            .and_then(|months| i32::try_from(months).ok())
+            .map(RecurrenceRule::Months),
+        "h" => amount.checked_mul(60 * 60).map(RecurrenceRule::Seconds),
+        _ => None,
+    }
+}
+
+fn parse_time_period_recurrence(value: &str) -> Option<RecurrenceRule> {
+    if value.len() < 2 {
+        return None;
+    }
+
+    let (amount, unit) = value.split_at(value.len() - 1);
+    let amount = amount.parse::<i64>().ok()?;
+    if amount <= 0 {
+        return None;
+    }
+
+    let seconds = match unit {
+        "h" => amount.checked_mul(60 * 60)?,
+        "m" => amount.checked_mul(60)?,
+        "s" => amount,
+        _ => return None,
+    };
+    Some(RecurrenceRule::Seconds(seconds))
+}
+
+fn positive_months(amount: i64) -> Option<RecurrenceRule> {
+    if amount <= 0 {
+        None
+    } else {
+        i32::try_from(amount).ok().map(RecurrenceRule::Months)
     }
 }
 
@@ -1638,6 +1718,14 @@ fn days_in_month(year: i32, month: u32) -> u32 {
         (Some(this), Some(next)) => (next - this).num_days() as u32,
         _ => 28,
     }
+}
+
+fn shift_date_by_due_offset(
+    template_due: DateTime<Utc>,
+    template_date: DateTime<Utc>,
+    child_due: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    child_due.checked_add_signed(template_date - template_due)
 }
 
 fn recurrence_mask_char(task: &taskchampion::Task) -> char {
@@ -1684,13 +1772,14 @@ mod tests {
 
         replica.commit_operations(ops).unwrap();
 
-        WorkerState::ensure_recurrence_instances(&mut replica).unwrap();
+        WorkerState::ensure_recurrence_instances(&mut replica, DEFAULT_RECURRENCE_LIMIT).unwrap();
 
+        let template_uuid_text = template_uuid.to_string();
         let children: Vec<_> = replica
             .all_tasks()
             .unwrap()
             .into_iter()
-            .filter(|(_, t)| t.get_value("parent") == Some(template_uuid.to_string().as_str()))
+            .filter(|(_, t)| t.get_value("parent") == Some(template_uuid_text.as_str()))
             .collect();
 
         assert!(!children.is_empty());
@@ -1719,24 +1808,29 @@ mod tests {
             )
             .unwrap();
         template
-            .set_value("sched", Some("2026-04-10T00:00:00Z".to_string()), &mut ops)
+            .set_value(
+                "scheduled",
+                Some("2026-04-10T00:00:00Z".to_string()),
+                &mut ops,
+            )
             .unwrap();
 
         replica.commit_operations(ops).unwrap();
 
-        WorkerState::ensure_recurrence_instances(&mut replica).unwrap();
+        WorkerState::ensure_recurrence_instances(&mut replica, DEFAULT_RECURRENCE_LIMIT).unwrap();
 
+        let template_uuid_text = template_uuid.to_string();
         let children: Vec<_> = replica
             .all_tasks()
             .unwrap()
             .into_iter()
-            .filter(|(_, t)| t.get_value("parent") == Some(template_uuid.to_string().as_str()))
+            .filter(|(_, t)| t.get_value("parent") == Some(template_uuid_text.as_str()))
             .collect();
 
         assert!(!children.is_empty());
         let child = &children[0].1;
 
-        assert_eq!(child.get_value("sched"), Some("2026-04-10T00:00:00Z"));
+        assert_eq!(child.get_value("scheduled"), Some("2026-04-10T00:00:00Z"));
     }
 
     #[test]
@@ -1778,11 +1872,31 @@ mod tests {
     fn parses_supported_recurrence_rules() {
         assert!(matches!(
             parse_recurrence_rule("daily"),
-            Some(RecurrenceRule::Daily)
+            Some(RecurrenceRule::Days(1))
         ));
         assert!(matches!(
             parse_recurrence_rule("bi-weekly"),
-            Some(RecurrenceRule::Biweekly)
+            Some(RecurrenceRule::Days(14))
+        ));
+        assert!(matches!(
+            parse_recurrence_rule("quarterly"),
+            Some(RecurrenceRule::Months(3))
+        ));
+        assert!(matches!(
+            parse_recurrence_rule("P6M"),
+            Some(RecurrenceRule::Months(6))
+        ));
+        assert!(matches!(
+            parse_recurrence_rule("2mo"),
+            Some(RecurrenceRule::Months(2))
+        ));
+        assert!(matches!(
+            parse_recurrence_rule("3w"),
+            Some(RecurrenceRule::Days(21))
+        ));
+        assert!(matches!(
+            parse_recurrence_rule("PT1H"),
+            Some(RecurrenceRule::Seconds(3600))
         ));
         assert!(matches!(
             parse_recurrence_rule("weekdays"),
@@ -1794,7 +1908,7 @@ mod tests {
     #[test]
     fn monthly_recurrence_clamps_day_for_short_months() {
         let base = parse_iso8601("2026-01-31T00:00:00Z").expect("base date must parse");
-        let next = due_for_index(base, RecurrenceRule::Monthly, 1).expect("next date");
+        let next = due_for_index(base, RecurrenceRule::Months(1), 1).expect("next date");
         assert_eq!(next.to_rfc3339(), "2026-02-28T00:00:00+00:00");
     }
 
@@ -1806,27 +1920,89 @@ mod tests {
     }
 
     #[test]
-    fn template_recurrence_limit_uses_uda() {
+    fn recurrence_limit_zero_stops_instance_generation() {
+        let storage = StorageConfig::InMemory
+            .into_storage()
+            .expect("in-memory storage");
+        let mut state = WorkerState {
+            replica: Some(Replica::new(storage)),
+            recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
+        };
+
+        state
+            .set_recurrence_limit(0)
+            .expect("set recurrence limit to zero");
+
+        let uuid = state
+            .add_task(CreateTaskParams {
+                description: "No instances".to_string(),
+                status: super::super::models::TaskStatus::Pending,
+                project: None,
+                priority: None,
+                tags: vec![],
+                due: Some("2026-04-01T00:00:00Z".to_string()),
+                wait: None,
+                scheduled: None,
+                recurrence: Some("daily".to_string()),
+                until: None,
+                udas: vec![],
+            })
+            .expect("add recurring task");
+
+        let mut replica = state.replica.take().expect("replica available");
+        let children = replica
+            .all_tasks()
+            .expect("load tasks")
+            .into_iter()
+            .filter(|(_, task)| task.get_value("parent") == Some(uuid.as_str()))
+            .count();
+        assert_eq!(children, 0);
+    }
+
+    #[test]
+    fn recurrence_limit_applies_to_synced_templates_without_uda() {
         let storage = StorageConfig::InMemory
             .into_storage()
             .expect("in-memory storage");
         let mut replica = Replica::new(storage);
         let mut ops = Operations::new();
-        let uuid = Uuid::new_v4();
-        let mut task = replica
-            .create_task(uuid, &mut ops)
-            .expect("create template task");
-        task.set_status(TcStatus::Recurring, &mut ops)
-            .expect("set recurring status");
-        task.set_user_defined_attribute(RECUR_LIMIT_UDA_KEY.to_string(), "3".to_string(), &mut ops)
-            .expect("set recurrence limit UDA");
+
+        let template_uuid = Uuid::new_v4();
+        let mut template = replica
+            .create_task(template_uuid, &mut ops)
+            .expect("create template");
+        template
+            .set_description("Synced template".to_string(), &mut ops)
+            .expect("set description");
+        template
+            .set_status(TcStatus::Recurring, &mut ops)
+            .expect("set recurring");
+        template
+            .set_due(
+                Some(parse_iso8601("2026-01-01T00:00:00Z").expect("parse due")),
+                &mut ops,
+            )
+            .expect("set due");
+        template
+            .set_value("recur", Some("daily".to_string()), &mut ops)
+            .expect("set recur");
         replica.commit_operations(ops).expect("commit setup");
 
-        let loaded = replica
-            .get_task(uuid)
-            .expect("load template")
-            .expect("template exists");
-        assert_eq!(template_recurrence_limit(&loaded), 3);
+        let mut state = WorkerState {
+            replica: Some(replica),
+            recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
+        };
+        state.set_recurrence_limit(2).expect("set recurrence limit");
+
+        let mut replica = state.replica.take().expect("replica available");
+        let template_uuid_text = template_uuid.to_string();
+        let children = replica
+            .all_tasks()
+            .expect("load tasks")
+            .into_iter()
+            .filter(|(_, task)| task.get_value("parent") == Some(template_uuid_text.as_str()))
+            .count();
+        assert_eq!(children, 2);
     }
 
     #[test]
@@ -1929,19 +2105,306 @@ mod tests {
 
         let mut state = WorkerState {
             replica: Some(replica),
+            recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
         };
-        state
+        let result = state.update_task(
+            template_uuid.to_string(),
+            UpdateTaskParams {
+                description: None,
+                status: Some(super::super::models::TaskStatus::Pending),
+                project: None,
+                priority: None,
+                due: None,
+                wait: None,
+                scheduled: None,
+                recurrence: None,
+                until: None,
+                add_tags: vec![],
+                remove_tags: vec![],
+                add_annotation: None,
+                remove_annotations: vec![],
+                add_depends: vec![],
+                remove_depends: vec![],
+                start: None,
+                set_udas: vec![],
+            },
+        );
+
+        assert!(result.is_err());
+        let mut replica = state.replica.take().expect("replica available");
+        let updated = replica
+            .get_task(template_uuid)
+            .expect("load template")
+            .expect("template exists");
+        assert_eq!(updated.get_status(), TcStatus::Recurring);
+        assert_eq!(updated.get_value("recur"), Some("weekly"));
+        assert_eq!(updated.get_value("mask"), Some("-"));
+    }
+
+    #[test]
+    fn recurring_template_rejects_clearing_recurrence_or_due() {
+        let storage = StorageConfig::InMemory
+            .into_storage()
+            .expect("in-memory storage");
+        let mut state = WorkerState {
+            replica: Some(Replica::new(storage)),
+            recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
+        };
+
+        let uuid = state
+            .add_task(CreateTaskParams {
+                description: "Template".to_string(),
+                status: super::super::models::TaskStatus::Pending,
+                project: None,
+                priority: None,
+                tags: vec![],
+                due: Some("2026-04-01T00:00:00Z".to_string()),
+                wait: None,
+                scheduled: None,
+                recurrence: Some("weekly".to_string()),
+                until: None,
+                udas: vec![],
+            })
+            .expect("add recurring task");
+
+        let clear_recur = state.update_task(
+            uuid.clone(),
+            UpdateTaskParams {
+                description: None,
+                status: None,
+                project: None,
+                priority: None,
+                due: None,
+                wait: None,
+                scheduled: None,
+                recurrence: Some("".to_string()),
+                until: None,
+                add_tags: vec![],
+                remove_tags: vec![],
+                add_annotation: None,
+                remove_annotations: vec![],
+                add_depends: vec![],
+                remove_depends: vec![],
+                start: None,
+                set_udas: vec![],
+            },
+        );
+        assert!(clear_recur.is_err());
+
+        let clear_due = state.update_task(
+            uuid,
+            UpdateTaskParams {
+                description: None,
+                status: None,
+                project: None,
+                priority: None,
+                due: Some("".to_string()),
+                wait: None,
+                scheduled: None,
+                recurrence: None,
+                until: None,
+                add_tags: vec![],
+                remove_tags: vec![],
+                add_annotation: None,
+                remove_annotations: vec![],
+                add_depends: vec![],
+                remove_depends: vec![],
+                start: None,
+                set_udas: vec![],
+            },
+        );
+        assert!(clear_due.is_err());
+    }
+
+    #[test]
+    fn recurring_until_expires_instances_and_reaps_exhausted_template() {
+        let storage = StorageConfig::InMemory
+            .into_storage()
+            .expect("in-memory storage");
+        let mut replica = Replica::new(storage);
+        let mut ops = Operations::new();
+
+        let template_uuid = Uuid::new_v4();
+        let child_uuid = Uuid::new_v4();
+        let until = "2024-01-02T00:00:00Z".to_string();
+
+        let mut template = replica
+            .create_task(template_uuid, &mut ops)
+            .expect("create template");
+        template
+            .set_description("Old series".to_string(), &mut ops)
+            .expect("set description");
+        template
+            .set_status(TcStatus::Recurring, &mut ops)
+            .expect("set recurring");
+        template
+            .set_due(
+                Some(parse_iso8601("2024-01-01T00:00:00Z").expect("parse due")),
+                &mut ops,
+            )
+            .expect("set due");
+        template
+            .set_value("recur", Some("daily".to_string()), &mut ops)
+            .expect("set recur");
+        template
+            .set_value("until", Some(until.clone()), &mut ops)
+            .expect("set until");
+
+        let mut child = replica
+            .create_task(child_uuid, &mut ops)
+            .expect("create child");
+        child
+            .set_status(TcStatus::Pending, &mut ops)
+            .expect("set pending");
+        child
+            .set_due(
+                Some(parse_iso8601("2024-01-01T00:00:00Z").expect("parse child due")),
+                &mut ops,
+            )
+            .expect("set child due");
+        child
+            .set_value("parent", Some(template_uuid.to_string()), &mut ops)
+            .expect("set parent");
+        child
+            .set_value("imask", Some("0".to_string()), &mut ops)
+            .expect("set imask");
+        child
+            .set_value("recur", Some("daily".to_string()), &mut ops)
+            .expect("set child recur");
+        child
+            .set_value("until", Some(until), &mut ops)
+            .expect("set child until");
+        replica.commit_operations(ops).expect("commit setup");
+
+        WorkerState::apply_maintenance(&mut replica, DEFAULT_RECURRENCE_LIMIT)
+            .expect("maintenance succeeds");
+
+        // Template is reaped (status → Deleted): until passed, sole child expired, no pending remain.
+        let template = replica
+            .get_task(template_uuid)
+            .expect("load template")
+            .expect("template must still exist (status=Deleted)");
+        assert_eq!(template.get_status(), TcStatus::Deleted);
+
+        let child = replica
+            .get_task(child_uuid)
+            .expect("load child")
+            .expect("child exists");
+        assert_eq!(child.get_status(), TcStatus::Deleted);
+    }
+
+    #[test]
+    fn generated_recurring_children_shift_wait_relative_to_due() {
+        let storage = StorageConfig::InMemory
+            .into_storage()
+            .expect("in-memory storage");
+        let mut state = WorkerState {
+            replica: Some(Replica::new(storage)),
+            recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
+        };
+
+        state.set_recurrence_limit(2).expect("set recurrence limit");
+
+        let uuid = state
+            .add_task(CreateTaskParams {
+                description: "Offset wait".to_string(),
+                status: super::super::models::TaskStatus::Pending,
+                project: None,
+                priority: None,
+                tags: vec![],
+                due: Some("2026-01-10T09:00:00Z".to_string()),
+                wait: Some("2026-01-09T09:00:00Z".to_string()),
+                scheduled: None,
+                recurrence: Some("daily".to_string()),
+                until: None,
+                udas: vec![],
+            })
+            .expect("add recurring task");
+
+        let mut replica = state.replica.take().expect("replica available");
+        let children = replica
+            .all_tasks()
+            .expect("load tasks")
+            .into_iter()
+            .filter_map(|(_, task)| {
+                if task.get_value("parent") == Some(uuid.as_str()) {
+                    Some(task)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let second = children
+            .iter()
+            .find(|task| task.get_value("imask") == Some("1"))
+            .expect("second child exists");
+        assert_eq!(
+            second.get_due().map(|date| date.to_rfc3339()),
+            Some("2026-01-11T09:00:00+00:00".to_string())
+        );
+        assert_eq!(
+            second.get_wait().map(|date| date.to_rfc3339()),
+            Some("2026-01-10T09:00:00+00:00".to_string())
+        );
+    }
+
+    #[test]
+    fn clearing_child_recurrence_is_rejected() {
+        let storage = StorageConfig::InMemory
+            .into_storage()
+            .expect("in-memory storage");
+        let mut state = WorkerState {
+            replica: Some(Replica::new(storage)),
+            recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
+        };
+
+        let template_uuid = state
+            .add_task(CreateTaskParams {
+                description: "Series".to_string(),
+                status: super::super::models::TaskStatus::Pending,
+                project: None,
+                priority: None,
+                tags: vec![],
+                due: Some("2026-01-10T09:00:00Z".to_string()),
+                wait: None,
+                scheduled: None,
+                recurrence: Some("daily".to_string()),
+                until: None,
+                udas: vec![],
+            })
+            .expect("add recurring task");
+
+        let child_uuid = {
+            let mut replica = state.replica.take().expect("replica available");
+            let child_uuid = replica
+                .all_tasks()
+                .expect("load tasks")
+                .into_iter()
+                .find_map(|(_, task)| {
+                    if task.get_value("parent") == Some(template_uuid.as_str()) {
+                        Some(task.get_uuid().to_string())
+                    } else {
+                        None
+                    }
+                })
+                .expect("child exists");
+            state.replica = Some(replica);
+            child_uuid
+        };
+
+        let err = state
             .update_task(
-                template_uuid.to_string(),
+                child_uuid.clone(),
                 UpdateTaskParams {
                     description: None,
-                    status: Some(super::super::models::TaskStatus::Pending),
+                    status: None,
                     project: None,
                     priority: None,
                     due: None,
                     wait: None,
                     scheduled: None,
-                    recurrence: None,
+                    recurrence: Some("".to_string()),
                     until: None,
                     add_tags: vec![],
                     remove_tags: vec![],
@@ -1953,16 +2416,41 @@ mod tests {
                     set_udas: vec![],
                 },
             )
-            .expect("update task");
+            .expect_err("reject clearing recurrence on recurring child");
+        assert!(
+            err.to_string()
+                .contains("You cannot remove the recurrence from a recurring task"),
+            "unexpected error: {err}"
+        );
+    }
 
-        let mut replica = state.replica.take().expect("replica available");
-        let updated = replica
-            .get_task(template_uuid)
-            .expect("load template")
-            .expect("template exists");
-        assert_eq!(updated.get_status(), TcStatus::Pending);
-        assert_eq!(updated.get_value("recur"), None);
-        assert_eq!(updated.get_value("mask"), None);
+    #[test]
+    fn completing_series_is_rejected() {
+        let storage = StorageConfig::InMemory
+            .into_storage()
+            .expect("in-memory storage");
+        let mut state = WorkerState {
+            replica: Some(Replica::new(storage)),
+            recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
+        };
+
+        let uuid = state
+            .add_task(CreateTaskParams {
+                description: "Series".to_string(),
+                status: super::super::models::TaskStatus::Pending,
+                project: None,
+                priority: None,
+                tags: vec![],
+                due: Some("2026-01-10T09:00:00Z".to_string()),
+                wait: None,
+                scheduled: None,
+                recurrence: Some("daily".to_string()),
+                until: None,
+                udas: vec![],
+            })
+            .expect("add recurring task");
+
+        assert!(state.done_task_series(uuid).is_err());
     }
 
     #[test]
@@ -1973,6 +2461,7 @@ mod tests {
         let replica = Replica::new(storage);
         let mut state = WorkerState {
             replica: Some(replica),
+            recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
         };
 
         let result = state.add_task(CreateTaskParams {
@@ -2000,6 +2489,7 @@ mod tests {
         let replica = Replica::new(storage);
         let mut state = WorkerState {
             replica: Some(replica),
+            recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
         };
 
         let payload = serde_json::to_string(&vec![TaskSnapshot {
@@ -2130,6 +2620,7 @@ mod tests {
             .expect("in-memory storage");
         let mut state = WorkerState {
             replica: Some(Replica::new(storage)),
+            recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
         };
 
         for index in 0..3 {
@@ -2191,6 +2682,10 @@ fn worker_loop(mut receiver: mpsc::Receiver<WorkerCommand>) {
             }
             WorkerCommand::AddTask { params, reply } => {
                 let _ = reply.send(state.add_task(params));
+                false
+            }
+            WorkerCommand::SetRecurrenceLimit { limit, reply } => {
+                let _ = reply.send(state.set_recurrence_limit(limit));
                 false
             }
             WorkerCommand::UpdateTask {
@@ -2358,6 +2853,11 @@ impl TaskManager {
 
     pub async fn add_task(&self, params: CreateTaskParams) -> Result<String> {
         self.request(|reply| WorkerCommand::AddTask { params, reply })
+            .await
+    }
+
+    pub async fn set_recurrence_limit(&self, limit: usize) -> Result<()> {
+        self.request(|reply| WorkerCommand::SetRecurrenceLimit { limit, reply })
             .await
     }
 

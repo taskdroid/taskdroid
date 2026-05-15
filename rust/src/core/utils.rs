@@ -2,8 +2,8 @@ use super::error::{Result, TaskError};
 use super::models::{TaskAnnotation, TaskComputed, TaskCore, TaskSnapshot, TaskStatus, UdaPair};
 use std::str::FromStr;
 use taskchampion::{
-    chrono::{DateTime, Utc},
     Status as TcStatus, Tag,
+    chrono::{DateTime, Utc},
 };
 
 pub fn task_snapshot_from_task(t: taskchampion::Task) -> TaskSnapshot {
@@ -39,7 +39,15 @@ pub fn task_snapshot_from_task(t: taskchampion::Task) -> TaskSnapshot {
         .get_user_defined_attributes()
         .filter(|(k, _)| {
             ![
-                "project", "recur", "sched", "until", "start", "end", "parent", "imask",
+                "project",
+                "recur",
+                "sched",
+                "scheduled",
+                "until",
+                "start",
+                "end",
+                "parent",
+                "imask",
             ]
             .contains(k)
         })
@@ -77,7 +85,10 @@ pub fn task_snapshot_from_task(t: taskchampion::Task) -> TaskSnapshot {
         wait: t.get_wait().map(format_iso8601),
         start: t.get_value("start").and_then(parse_date_opt_str),
         end: t.get_value("end").and_then(parse_date_opt_str),
-        scheduled: t.get_value("sched").and_then(parse_date_opt_str),
+        scheduled: t
+            .get_value("scheduled")
+            .or_else(|| t.get_value("sched"))
+            .and_then(parse_date_opt_str),
         until: t.get_value("until").and_then(parse_date_opt_str),
         depends: t.get_dependencies().map(|u| u.to_string()).collect(),
         recurrence: t.get_value("recur").map(|s| s.to_string()),
@@ -218,7 +229,11 @@ fn calculate_urgency(t: &taskchampion::Task, now: DateTime<Utc>, next_tag: &Tag)
         }
     }
 
-    if let Some(sched) = t.get_value("sched").and_then(|s| parse_iso8601(s).ok()) {
+    if let Some(sched) = t
+        .get_value("scheduled")
+        .or_else(|| t.get_value("sched"))
+        .and_then(|s| parse_iso8601(s).ok())
+    {
         if sched < now {
             urgency += C_SCHED;
         }

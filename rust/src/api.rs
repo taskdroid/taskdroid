@@ -393,6 +393,10 @@ impl TaskManager {
         map_error(self.inner.add_task(params.into()).await)
     }
 
+    pub async fn set_recurrence_limit(&self, limit: usize) -> Result<()> {
+        map_error(self.inner.set_recurrence_limit(limit).await)
+    }
+
     pub async fn update_task(&self, uuid_str: String, params: UpdateTaskParams) -> Result<()> {
         map_error(self.inner.update_task(uuid_str, params.into()).await)
     }

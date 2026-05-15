@@ -205,7 +205,10 @@ fn read_date_field(task: &taskchampion::Task, field: DateField) -> Option<DateTi
         DateField::Wait => task.get_wait(),
         DateField::Entry => task.get_entry(),
         DateField::Modified => task.get_modified(),
-        DateField::Scheduled => parse_iso_value(task.get_value("sched")),
+        DateField::Scheduled => parse_iso_value(
+            task.get_value("scheduled")
+                .or_else(|| task.get_value("sched")),
+        ),
         DateField::Start => parse_iso_value(task.get_value("start")),
         DateField::End => parse_iso_value(task.get_value("end")),
         DateField::Until => parse_iso_value(task.get_value("until")),

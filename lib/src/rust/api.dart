@@ -39,6 +39,8 @@ abstract class TaskManager implements RustOpaqueInterface {
 
   factory TaskManager() => RustLib.instance.api.crateApiTaskManagerNew();
 
+  Future<void> setRecurrenceLimit({required BigInt limit});
+
   Future<void> startTasks({required List<String> uuidStrs});
 
   Future<void> stopTasks({required List<String> uuidStrs});

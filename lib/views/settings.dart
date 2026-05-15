@@ -100,7 +100,7 @@ class SettingsPage extends StatelessWidget {
                 subtitle: Text(
                   currentProfile == null
                       ? 'Select a profile to configure'
-                      : 'Number of pending recurring instances to generate.',
+                      : 'Number of pending recurring instances to generate (Off stops generation).',
                   style: TextStyle(
                     color: currentProfile == null ? colorScheme.error : null,
                   ),
@@ -109,16 +109,16 @@ class SettingsPage extends StatelessWidget {
                   width: 120,
                   child: DropdownButtonFormField<int>(
                     initialValue: (currentProfile?.recurrenceLimit ?? 1).clamp(
-                      1,
+                      0,
                       5,
                     ),
                     isExpanded: true,
                     decoration: const InputDecoration(isDense: true),
-                    items: const [1, 2, 3, 4, 5]
+                    items: const [0, 1, 2, 3, 4, 5]
                         .map(
                           (value) => DropdownMenuItem<int>(
                             value: value,
-                            child: Text('$value'),
+                            child: Text(value == 0 ? 'Off' : '$value'),
                           ),
                         )
                         .toList(),
@@ -130,22 +130,20 @@ class SettingsPage extends StatelessWidget {
                                 .read<ProfileState>()
                                 .setRecurrenceLimitForCurrentProfile(value);
                             if (!context.mounted) return;
-                            final profile = context
-                                .read<ProfileState>()
-                                .currentProfile;
-                            if (profile != null) {
-                              await context.read<TaskState>().loadProfile(
-                                profile,
-                              );
-                              if (!context.mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    'Recurring instance limit set to $value',
-                                  ),
+                            final error = await context
+                                .read<TaskState>()
+                                .setRecurrenceLimit(value);
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  error ??
+                                      (value == 0
+                                          ? 'Recurring instance generation disabled'
+                                          : 'Recurring instance limit set to $value'),
                                 ),
-                              );
-                            }
+                              ),
+                            );
                           },
                   ),
                 ),
