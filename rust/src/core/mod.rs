@@ -5,6 +5,9 @@ pub mod query;
 mod query_language;
 pub mod utils;
 
+#[cfg(test)]
+mod compat;
+
 pub use error::{Result, TaskError};
 pub use manager::TaskManager;
 pub use models::{

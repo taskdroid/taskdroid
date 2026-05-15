@@ -139,13 +139,13 @@ impl WorkerCommand {
     }
 }
 
-struct WorkerState {
-    replica: Option<Replica>,
-    recurrence_limit: usize,
+pub(crate) struct WorkerState {
+    pub(crate) replica: Option<Replica>,
+    pub(crate) recurrence_limit: usize,
 }
 
 impl WorkerState {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             replica: None,
             recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
@@ -236,7 +236,7 @@ impl WorkerState {
         })
     }
 
-    fn get_task(&mut self, uuid_str: String) -> Result<TaskSnapshot> {
+    pub(crate) fn get_task(&mut self, uuid_str: String) -> Result<TaskSnapshot> {
         let uuid = parse_uuid(&uuid_str)?;
         let recurrence_limit = self.recurrence_limit;
         let replica = self.replica_mut()?;
@@ -269,7 +269,7 @@ impl WorkerState {
         Ok(true)
     }
 
-    fn add_task(&mut self, params: CreateTaskParams) -> Result<String> {
+    pub(crate) fn add_task(&mut self, params: CreateTaskParams) -> Result<String> {
         let recurrence_limit = self.recurrence_limit;
         let replica = self.replica_mut()?;
         let mut ops = Operations::new();
@@ -359,7 +359,7 @@ impl WorkerState {
         Ok(uuid.to_string())
     }
 
-    fn update_task(&mut self, uuid_str: String, params: UpdateTaskParams) -> Result<()> {
+    pub(crate) fn update_task(&mut self, uuid_str: String, params: UpdateTaskParams) -> Result<()> {
         let uuid = parse_uuid(&uuid_str)?;
         let recurrence_limit = self.recurrence_limit;
         let replica = self.replica_mut()?;
@@ -582,11 +582,11 @@ impl WorkerState {
         self.set_status_for_tasks(uuid_strs, Some(TcStatus::Deleted), false)
     }
 
-    fn delete_task_single(&mut self, uuid_str: String) -> Result<()> {
+    pub(crate) fn delete_task_single(&mut self, uuid_str: String) -> Result<()> {
         self.set_status_for_tasks(vec![uuid_str], Some(TcStatus::Deleted), false)
     }
 
-    fn delete_task_series(&mut self, uuid_str: String) -> Result<()> {
+    pub(crate) fn delete_task_series(&mut self, uuid_str: String) -> Result<()> {
         let template_uuid = parse_uuid(&uuid_str)?;
         let replica = self.replica_mut()?;
 
@@ -647,7 +647,7 @@ impl WorkerState {
         self.set_status_for_tasks(uuid_strs, None, true)
     }
 
-    fn done_task_single(&mut self, uuid_str: String) -> Result<()> {
+    pub(crate) fn done_task_single(&mut self, uuid_str: String) -> Result<()> {
         self.set_status_for_tasks(vec![uuid_str], None, true)
     }
 
@@ -693,7 +693,7 @@ impl WorkerState {
         Ok(())
     }
 
-    fn export_tasks(&mut self, include_deleted: bool) -> Result<String> {
+    pub(crate) fn export_tasks(&mut self, include_deleted: bool) -> Result<String> {
         let recurrence_limit = self.recurrence_limit;
         let replica = self.replica_mut()?;
         Self::apply_maintenance(replica, recurrence_limit)?;
@@ -837,7 +837,7 @@ impl WorkerState {
         Ok(count)
     }
 
-    fn apply_maintenance(replica: &mut Replica, recurrence_limit: usize) -> Result<()> {
+    pub(crate) fn apply_maintenance(replica: &mut Replica, recurrence_limit: usize) -> Result<()> {
         Self::expire_until_tasks(replica)?;
         Self::ensure_recurrence_instances(replica, recurrence_limit)
     }
@@ -1136,12 +1136,9 @@ impl WorkerState {
                     {
                         if complete {
                             if task.get_status() == TcStatus::Recurring {
-                                warn!(
-                                    command = "set_status_for_tasks",
-                                    uuid = %uuid_str,
-                                    "skipped completing recurring template; use delete or until instead"
-                                );
-                                continue;
+                                return Err(TaskError::invalid_input(format!(
+                                    "Task `{uuid_str}` is a recurring template and cannot be completed; use delete series or set a repeat-until date"
+                                )));
                             }
                             task.done(&mut ops).map_err(|e| {
                                 TaskError::conflict(format!(
@@ -1557,7 +1554,7 @@ fn parse_uuid(value: &str) -> Result<Uuid> {
         .map_err(|e| TaskError::invalid_input(format!("Invalid UUID `{value}`: {e}")))
 }
 
-fn normalize_recurrence(value: Option<String>) -> Option<String> {
+pub(crate) fn normalize_recurrence(value: Option<String>) -> Option<String> {
     value.and_then(|entry| {
         let trimmed = entry.trim().to_string();
         if trimmed.is_empty() {
@@ -1569,14 +1566,14 @@ fn normalize_recurrence(value: Option<String>) -> Option<String> {
 }
 
 #[derive(Clone, Copy)]
-enum RecurrenceRule {
+pub(crate) enum RecurrenceRule {
     Seconds(i64),
     Days(i64),
     Months(i32),
     Weekdays,
 }
 
-fn parse_recurrence_rule(value: &str) -> Option<RecurrenceRule> {
+pub(crate) fn parse_recurrence_rule(value: &str) -> Option<RecurrenceRule> {
     let normalized = value.trim().to_lowercase();
     match normalized.as_str() {
         "daily" => Some(RecurrenceRule::Days(1)),
@@ -1593,7 +1590,7 @@ fn parse_recurrence_rule(value: &str) -> Option<RecurrenceRule> {
     }
 }
 
-fn due_for_index(
+pub(crate) fn due_for_index(
     base_due: DateTime<Utc>,
     recurrence: RecurrenceRule,
     index: usize,
@@ -1913,13 +1910,6 @@ mod tests {
     }
 
     #[test]
-    fn weekday_recurrence_skips_weekends() {
-        let friday = parse_iso8601("2026-04-03T00:00:00Z").expect("base date must parse");
-        let monday = due_for_index(friday, RecurrenceRule::Weekdays, 1).expect("next date");
-        assert_eq!(monday.weekday(), Weekday::Mon);
-    }
-
-    #[test]
     fn recurrence_limit_zero_stops_instance_generation() {
         let storage = StorageConfig::InMemory
             .into_storage()
@@ -2142,158 +2132,6 @@ mod tests {
     }
 
     #[test]
-    fn recurring_template_rejects_clearing_recurrence_or_due() {
-        let storage = StorageConfig::InMemory
-            .into_storage()
-            .expect("in-memory storage");
-        let mut state = WorkerState {
-            replica: Some(Replica::new(storage)),
-            recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
-        };
-
-        let uuid = state
-            .add_task(CreateTaskParams {
-                description: "Template".to_string(),
-                status: super::super::models::TaskStatus::Pending,
-                project: None,
-                priority: None,
-                tags: vec![],
-                due: Some("2026-04-01T00:00:00Z".to_string()),
-                wait: None,
-                scheduled: None,
-                recurrence: Some("weekly".to_string()),
-                until: None,
-                udas: vec![],
-            })
-            .expect("add recurring task");
-
-        let clear_recur = state.update_task(
-            uuid.clone(),
-            UpdateTaskParams {
-                description: None,
-                status: None,
-                project: None,
-                priority: None,
-                due: None,
-                wait: None,
-                scheduled: None,
-                recurrence: Some("".to_string()),
-                until: None,
-                add_tags: vec![],
-                remove_tags: vec![],
-                add_annotation: None,
-                remove_annotations: vec![],
-                add_depends: vec![],
-                remove_depends: vec![],
-                start: None,
-                set_udas: vec![],
-            },
-        );
-        assert!(clear_recur.is_err());
-
-        let clear_due = state.update_task(
-            uuid,
-            UpdateTaskParams {
-                description: None,
-                status: None,
-                project: None,
-                priority: None,
-                due: Some("".to_string()),
-                wait: None,
-                scheduled: None,
-                recurrence: None,
-                until: None,
-                add_tags: vec![],
-                remove_tags: vec![],
-                add_annotation: None,
-                remove_annotations: vec![],
-                add_depends: vec![],
-                remove_depends: vec![],
-                start: None,
-                set_udas: vec![],
-            },
-        );
-        assert!(clear_due.is_err());
-    }
-
-    #[test]
-    fn recurring_until_expires_instances_and_reaps_exhausted_template() {
-        let storage = StorageConfig::InMemory
-            .into_storage()
-            .expect("in-memory storage");
-        let mut replica = Replica::new(storage);
-        let mut ops = Operations::new();
-
-        let template_uuid = Uuid::new_v4();
-        let child_uuid = Uuid::new_v4();
-        let until = "2024-01-02T00:00:00Z".to_string();
-
-        let mut template = replica
-            .create_task(template_uuid, &mut ops)
-            .expect("create template");
-        template
-            .set_description("Old series".to_string(), &mut ops)
-            .expect("set description");
-        template
-            .set_status(TcStatus::Recurring, &mut ops)
-            .expect("set recurring");
-        template
-            .set_due(
-                Some(parse_iso8601("2024-01-01T00:00:00Z").expect("parse due")),
-                &mut ops,
-            )
-            .expect("set due");
-        template
-            .set_value("recur", Some("daily".to_string()), &mut ops)
-            .expect("set recur");
-        template
-            .set_value("until", Some(until.clone()), &mut ops)
-            .expect("set until");
-
-        let mut child = replica
-            .create_task(child_uuid, &mut ops)
-            .expect("create child");
-        child
-            .set_status(TcStatus::Pending, &mut ops)
-            .expect("set pending");
-        child
-            .set_due(
-                Some(parse_iso8601("2024-01-01T00:00:00Z").expect("parse child due")),
-                &mut ops,
-            )
-            .expect("set child due");
-        child
-            .set_value("parent", Some(template_uuid.to_string()), &mut ops)
-            .expect("set parent");
-        child
-            .set_value("imask", Some("0".to_string()), &mut ops)
-            .expect("set imask");
-        child
-            .set_value("recur", Some("daily".to_string()), &mut ops)
-            .expect("set child recur");
-        child
-            .set_value("until", Some(until), &mut ops)
-            .expect("set child until");
-        replica.commit_operations(ops).expect("commit setup");
-
-        WorkerState::apply_maintenance(&mut replica, DEFAULT_RECURRENCE_LIMIT)
-            .expect("maintenance succeeds");
-
-        // Template is reaped (status → Deleted): until passed, sole child expired, no pending remain.
-        let template = replica
-            .get_task(template_uuid)
-            .expect("load template")
-            .expect("template must still exist (status=Deleted)");
-        assert_eq!(template.get_status(), TcStatus::Deleted);
-
-        let child = replica
-            .get_task(child_uuid)
-            .expect("load child")
-            .expect("child exists");
-        assert_eq!(child.get_status(), TcStatus::Deleted);
-    }
-
-    #[test]
     fn generated_recurring_children_shift_wait_relative_to_due() {
         let storage = StorageConfig::InMemory
             .into_storage()
@@ -2425,7 +2263,7 @@ mod tests {
     }
 
     #[test]
-    fn completing_series_is_rejected() {
+    fn completing_recurring_template_is_rejected() {
         let storage = StorageConfig::InMemory
             .into_storage()
             .expect("in-memory storage");
@@ -2434,7 +2272,7 @@ mod tests {
             recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
         };
 
-        let uuid = state
+        let template_uuid = state
             .add_task(CreateTaskParams {
                 description: "Series".to_string(),
                 status: super::super::models::TaskStatus::Pending,
@@ -2450,7 +2288,49 @@ mod tests {
             })
             .expect("add recurring task");
 
-        assert!(state.done_task_series(uuid).is_err());
+        let err = state
+            .done_task_single(template_uuid.clone())
+            .expect_err("reject completing recurring template");
+        assert!(
+            err.to_string().contains("cannot be completed"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn completing_series_is_rejected() {
+        let storage = StorageConfig::InMemory
+            .into_storage()
+            .expect("in-memory storage");
+        let mut state = WorkerState {
+            replica: Some(Replica::new(storage)),
+            recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
+        };
+
+        let template_uuid = state
+            .add_task(CreateTaskParams {
+                description: "Series".to_string(),
+                status: super::super::models::TaskStatus::Pending,
+                project: None,
+                priority: None,
+                tags: vec![],
+                due: Some("2026-01-10T09:00:00Z".to_string()),
+                wait: None,
+                scheduled: None,
+                recurrence: Some("daily".to_string()),
+                until: None,
+                udas: vec![],
+            })
+            .expect("add recurring task");
+
+        let err = state
+            .done_task_series(template_uuid)
+            .expect_err("reject completing recurring series");
+        assert!(
+            err.to_string()
+                .contains("Recurring series cannot be completed as a group"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
