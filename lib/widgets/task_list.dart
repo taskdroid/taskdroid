@@ -192,6 +192,16 @@ class TaskListItem extends StatelessWidget {
           return error == null;
         }
 
+        if (task.isRecurringTemplate) {
+          _showSnack(
+            context,
+            'Recurring series templates cannot be completed. Delete the series or set Repeat Until instead.',
+            taskState,
+            canUndo: false,
+          );
+          return false;
+        }
+
         final error = await taskState.markTaskDone(task.uuid);
         if (!context.mounted) return false;
         _showSnack(
@@ -222,7 +232,13 @@ class TaskListItem extends StatelessWidget {
     }
 
     if (task.recurrence != null && task.recurrence!.isNotEmpty) {
-      parts.add('Repeats ${task.recurrence!}');
+      if (task.isRecurringInstance) {
+        parts.add('Instance - ${task.recurrence!}');
+      } else if (task.isRecurringTemplate) {
+        parts.add('Series - ${task.recurrence!}');
+      } else {
+        parts.add('Repeats ${task.recurrence!}');
+      }
     }
 
     if (parts.isEmpty) {

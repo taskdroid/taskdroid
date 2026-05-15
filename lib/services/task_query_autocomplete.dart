@@ -18,7 +18,10 @@ class TaskQuerySuggestion {
 }
 
 class TaskQueryCompletion {
-  const TaskQueryCompletion({required this.text, required this.selectionOffset});
+  const TaskQueryCompletion({
+    required this.text,
+    required this.selectionOffset,
+  });
 
   final String text;
   final int selectionOffset;
@@ -231,9 +234,10 @@ class TaskQueryAutocomplete {
       case 'wait':
         _addPrefixed(
           suggestions,
-          ['someday', ...TaskQuerySyntax.dateLiteralNames].map(
-            (literal) => '$rawKey:$literal',
-          ),
+          [
+            'someday',
+            ...TaskQuerySyntax.dateLiteralNames,
+          ].map((literal) => '$rawKey:$literal'),
           prefix: prefix,
           detail: 'Date',
           type: TaskQuerySuggestionType.date,
@@ -358,7 +362,11 @@ class TaskQueryAutocomplete {
     }
 
     if (start == end) return null;
-    return _QueryToken(start: start, end: end, text: query.substring(start, end));
+    return _QueryToken(
+      start: start,
+      end: end,
+      text: query.substring(start, end),
+    );
   }
 
   static bool _isTokenBoundary(String char) {

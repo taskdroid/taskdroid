@@ -77,7 +77,7 @@ class ProfileState extends ChangeNotifier {
   Future<void> setRecurrenceLimitForCurrentProfile(int limit) async {
     final profile = currentProfile;
     if (profile != null) {
-      final normalized = limit < 1 ? 1 : limit;
+      final normalized = limit < 0 ? 0 : limit;
       final updated = profile.copyWith(recurrenceLimit: normalized);
       await updateProfile(updated);
     }

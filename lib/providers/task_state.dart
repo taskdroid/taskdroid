@@ -16,8 +16,6 @@ import 'package:uuid/uuid.dart';
 enum TaskQueueView { ready, waiting, scheduled }
 
 class TaskState extends ChangeNotifier {
-  static const String _recurrenceLimitUdaKey = 'taskdroid.recurrence.limit';
-
   TaskManager? _taskManager;
   List<TaskView> _allTasks = [];
   List<TaskView> _readyTasks = [];
@@ -130,8 +128,8 @@ class TaskState extends ChangeNotifier {
     _error = null;
     _currentProfileId = profile.id;
     _isCalendarSyncEnabled = profile.calendarSync;
-    _recurrenceLimit = profile.recurrenceLimit < 1
-        ? 1
+    _recurrenceLimit = profile.recurrenceLimit < 0
+        ? 0
         : profile.recurrenceLimit;
     notifyListeners();
 
@@ -140,6 +138,10 @@ class TaskState extends ChangeNotifier {
 
       _taskManager = TaskManager();
       await _taskManager!.loadProfile(directoryPath: dbDir.path);
+      await _taskManager!.loadProfile(directoryPath: dbDirPath);
+      await _taskManager!.setRecurrenceLimit(
+        limit: BigInt.from(_recurrenceLimit),
+      );
 
       await _loadFilterTabs(profile.id);
 
@@ -300,6 +302,21 @@ class TaskState extends ChangeNotifier {
 
   TaskView? findTaskByUuid(String uuid) => _taskByUuid[uuid];
 
+  Future<TaskView?> getTaskByUuid(String uuid) async {
+    final cached = _taskByUuid[uuid];
+    if (cached != null) return cached;
+    final manager = _taskManager;
+    if (manager == null) return null;
+    try {
+      final task = await manager.getTask(uuidStr: uuid);
+      _taskByUuid[task.uuid] = task;
+      return task;
+    } catch (e) {
+      debugPrint('getTaskByUuid: failed to fetch task $uuid: $e');
+      return null;
+    }
+  }
+
   List<TaskView> get dependencyCandidates => [
     ..._readyTasks,
     ..._waitingTasks,
@@ -309,10 +326,6 @@ class TaskState extends ChangeNotifier {
   Future<String?> createTask(CreateTaskParams params) async {
     if (_taskManager == null) return 'No profile loaded';
     try {
-      final mergedUdas = _mergeRecurrenceLimitUda(
-        params.udas,
-        params.recurrence,
-      );
       final uuid = await _taskManager!.addTask(
         params: CreateTaskParams(
           description: params.description,
@@ -325,7 +338,7 @@ class TaskState extends ChangeNotifier {
           scheduled: params.scheduled,
           recurrence: params.recurrence,
           until: params.until,
-          udas: mergedUdas,
+          udas: params.udas,
         ),
       );
       await refreshPendingTasks();
@@ -400,25 +413,9 @@ class TaskState extends ChangeNotifier {
     }
   }
 
-  Future<String?> markTaskDoneSeries(String uuid) async {
-    if (_taskManager == null) return 'No profile loaded';
-    try {
-      await _taskManager!.doneTaskSeries(uuidStr: uuid);
-      if (_isCalendarSyncEnabled) await _calendarService.deleteTask(uuid);
-      await refreshPendingTasks();
-      return null;
-    } catch (e) {
-      return e.toString();
-    }
-  }
-
   Future<String?> updateTask(String uuid, UpdateTaskParams params) async {
     if (_taskManager == null) return 'No profile loaded';
     try {
-      final mergedUdas = _mergeRecurrenceLimitUda(
-        params.setUdas,
-        params.recurrence,
-      );
       await _taskManager!.updateTask(
         uuidStr: uuid,
         params: UpdateTaskParams(
@@ -438,7 +435,7 @@ class TaskState extends ChangeNotifier {
           addDepends: params.addDepends,
           removeDepends: params.removeDepends,
           start: params.start,
-          setUdas: mergedUdas,
+          setUdas: params.setUdas,
         ),
       );
       await refreshPendingTasks();
@@ -447,6 +444,33 @@ class TaskState extends ChangeNotifier {
         final updated = await _taskManager!.getTask(uuidStr: uuid);
         await _calendarService.syncTask(updated);
       }
+      return null;
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
+  Future<String?> updateTaskSeries(String uuid, UpdateTaskParams params) async {
+    if (_taskManager == null) return 'No profile loaded';
+    try {
+      final task = await getTaskByUuid(uuid);
+      if (task == null) return 'Task not found';
+      final seriesUuid = task.isRecurringTemplate ? task.uuid : task.parentUuid;
+      if (seriesUuid == null) return 'Task is not part of a recurring series';
+      return updateTask(seriesUuid, params);
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
+  Future<String?> setRecurrenceLimit(int limit) async {
+    final manager = _taskManager;
+    if (manager == null) return 'No profile loaded';
+    final normalized = limit < 0 ? 0 : limit;
+    try {
+      await manager.setRecurrenceLimit(limit: BigInt.from(normalized));
+      _recurrenceLimit = normalized;
+      await refreshPendingTasks();
       return null;
     } catch (e) {
       return e.toString();
@@ -483,7 +507,9 @@ class TaskState extends ChangeNotifier {
 
   Future<String?> bulkMarkDone() async {
     if (_taskManager == null) return null;
-    final ids = _selectedTaskUuids.toList();
+    final ids = _selectedTaskUuids
+        .where((uuid) => _taskByUuid[uuid]?.isRecurringTemplate != true)
+        .toList();
     if (ids.isEmpty) return null;
 
     try {
@@ -503,7 +529,9 @@ class TaskState extends ChangeNotifier {
 
   Future<String?> bulkDelete() async {
     if (_taskManager == null) return null;
-    final ids = _selectedTaskUuids.toList();
+    final ids = _selectedTaskUuids
+        .where((uuid) => _taskByUuid[uuid]?.isRecurringTemplate != true)
+        .toList();
     if (ids.isEmpty) return null;
 
     try {
@@ -904,25 +932,6 @@ class TaskState extends ChangeNotifier {
     notifyListeners();
   }
 
-  List<UdaPair> _mergeRecurrenceLimitUda(
-    List<UdaPair> source,
-    String? recurrence,
-  ) {
-    final hasRecurrence = recurrence != null && recurrence.trim().isNotEmpty;
-    final filtered = source
-        .where((pair) => pair.key != _recurrenceLimitUdaKey)
-        .toList(growable: true);
-    if (hasRecurrence) {
-      filtered.add(
-        UdaPair(
-          key: _recurrenceLimitUdaKey,
-          value: _recurrenceLimit.toString(),
-        ),
-      );
-    }
-    return filtered;
-  }
-
   @override
   void dispose() {
     _saveTabTimer?.cancel();
@@ -943,6 +952,7 @@ class TaskState extends ChangeNotifier {
           url: profile.serverUrl,
           clientId: profile.uuid,
           encryptionSecret: profile.secret,
+          recurrenceLimit: _recurrenceLimit,
         ),
       );
 
@@ -980,11 +990,13 @@ class _SyncParams {
   final String url;
   final String clientId;
   final String encryptionSecret;
+  final int recurrenceLimit;
   _SyncParams({
     required this.directoryPath,
     required this.url,
     required this.clientId,
     required this.encryptionSecret,
+    required this.recurrenceLimit,
   });
 }
 
@@ -999,6 +1011,7 @@ Future<_SyncResult> _syncInIsolate(_SyncParams params) async {
     await RustLib.init();
     final manager = TaskManager();
     await manager.loadProfile(directoryPath: params.directoryPath);
+    await manager.setRecurrenceLimit(limit: BigInt.from(params.recurrenceLimit));
     await manager.sync_(
       url: params.url,
       clientId: params.clientId,

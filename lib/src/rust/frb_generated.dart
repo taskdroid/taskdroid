@@ -64,7 +64,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => 608412141;
+  int get rustContentHash => -1253240180;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -140,6 +140,11 @@ abstract class RustLibApi extends BaseApi {
   });
 
   TaskManager crateApiTaskManagerNew();
+
+  Future<void> crateApiTaskManagerSetRecurrenceLimit({
+    required TaskManager that,
+    required BigInt limit,
+  });
 
   Future<void> crateApiTaskManagerStartTasks({
     required TaskManager that,
@@ -697,6 +702,44 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "TaskManager_new", argNames: []);
 
   @override
+  Future<void> crateApiTaskManagerSetRecurrenceLimit({
+    required TaskManager that,
+    required BigInt limit,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTaskManager(
+            that,
+            serializer,
+          );
+          sse_encode_usize(limit, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 15,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiTaskManagerSetRecurrenceLimitConstMeta,
+        argValues: [that, limit],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiTaskManagerSetRecurrenceLimitConstMeta =>
+      const TaskConstMeta(
+        debugName: "TaskManager_set_recurrence_limit",
+        argNames: ["that", "limit"],
+      );
+
+  @override
   Future<void> crateApiTaskManagerStartTasks({
     required TaskManager that,
     required List<String> uuidStrs,
@@ -713,7 +756,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 16,
             port: port_,
           );
         },
@@ -751,7 +794,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 16,
+            funcId: 17,
             port: port_,
           );
         },
@@ -793,7 +836,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 17,
+            funcId: 18,
             port: port_,
           );
         },
@@ -826,7 +869,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 18,
+            funcId: 19,
             port: port_,
           );
         },
@@ -863,7 +906,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 19,
+            funcId: 20,
             port: port_,
           );
         },
@@ -2050,6 +2093,11 @@ class TaskManagerImpl extends RustOpaque implements TaskManager {
       .instance
       .api
       .crateApiTaskManagerLoadProfile(that: this, directoryPath: directoryPath);
+
+  Future<void> setRecurrenceLimit({required BigInt limit}) => RustLib
+      .instance
+      .api
+      .crateApiTaskManagerSetRecurrenceLimit(that: this, limit: limit);
 
   Future<void> startTasks({required List<String> uuidStrs}) => RustLib
       .instance

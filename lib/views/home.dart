@@ -1057,7 +1057,9 @@ class _SearchAndFiltersRowState extends State<TaskSearchAndFiltersRow> {
   }
 
   List<TaskQuerySuggestion> _buildSuggestions() {
-    final effectiveTags = widget.allTags.isNotEmpty ? widget.allTags : _stableTags;
+    final effectiveTags = widget.allTags.isNotEmpty
+        ? widget.allTags
+        : _stableTags;
     final effectiveProjects = widget.allProjects.isNotEmpty
         ? widget.allProjects
         : _stableProjects;

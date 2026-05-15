@@ -21,7 +21,9 @@ class CredentialsStorage {
     }
     try {
       final List<dynamic> profilesJson = jsonDecode(jsonString);
-      return profilesJson.map((json) => Profile.fromJson(json as Map<String, dynamic>)).toList();
+      return profilesJson
+          .map((json) => Profile.fromJson(json as Map<String, dynamic>))
+          .toList();
     } catch (e) {
       return [];
     }

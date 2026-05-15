@@ -2,6 +2,8 @@
 *.apk
 *.apk.idsig
 *.class
+*.apk
+*.apk.idsig
 *.log
 *.pyc
 *.swp

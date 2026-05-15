@@ -129,8 +129,7 @@ class _TagInputState extends State<TagInput> {
                     child: ConstrainedBox(
                       constraints: BoxConstraints(
                         maxHeight: 220,
-                        maxWidth: constraints
-                            .maxWidth,
+                        maxWidth: constraints.maxWidth,
                       ),
                       child: ListView.builder(
                         padding: EdgeInsets.zero,
