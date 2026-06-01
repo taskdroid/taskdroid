@@ -13,6 +13,7 @@ Future<TaskEditorResult?> showTaskEditorSheet(
   BuildContext context, {
   TaskView? originalTask,
   TaskEditorMode mode = TaskEditorMode.normal,
+  TaskEditorInitialValues? initialValues,
 }) {
   return showModalBottomSheet<TaskEditorResult>(
     context: context,
@@ -23,9 +24,21 @@ Future<TaskEditorResult?> showTaskEditorSheet(
     ),
     builder: (ctx) => FractionallySizedBox(
       heightFactor: 0.92,
-      child: TaskEditor(originalTask: originalTask, mode: mode),
+      child: TaskEditor(
+        originalTask: originalTask,
+        mode: mode,
+        initialValues: initialValues,
+      ),
     ),
   );
+}
+
+class TaskEditorInitialValues {
+  final String? project;
+  final String? priority;
+  final List<String>? tags;
+
+  const TaskEditorInitialValues({this.project, this.priority, this.tags});
 }
 
 class TaskEditorResult {
@@ -59,11 +72,13 @@ class TaskEditorResult {
 class TaskEditor extends StatefulWidget {
   final TaskView? originalTask;
   final TaskEditorMode mode;
+  final TaskEditorInitialValues? initialValues;
 
   const TaskEditor({
     super.key,
     this.originalTask,
     this.mode = TaskEditorMode.normal,
+    this.initialValues,
   });
 
   @override
@@ -127,6 +142,21 @@ class _TaskEditorState extends State<TaskEditor>
 
     _durationController = TextEditingController(text: initialDuration);
     _recurrenceController = TextEditingController(text: _recurrence);
+
+    // apply write query defaults for new tasks
+    if (widget.initialValues != null && t == null) {
+      final iv = widget.initialValues!;
+      if (iv.project != null && _project.isEmpty) _project = iv.project!;
+      if (iv.priority != null && _selectedPriority == 'X') {
+        final normalized = iv.priority!.toUpperCase();
+        if (const {'H', 'M', 'L'}.contains(normalized)) {
+          _selectedPriority = normalized;
+        }
+      }
+      if (iv.tags != null) {
+        _selectedTags = {..._selectedTags, ...iv.tags!}.toList();
+      }
+    }
 
     _dueDateController = _initDateController(
       t?.due,
