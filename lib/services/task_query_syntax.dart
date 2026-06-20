@@ -1,7 +1,7 @@
 class TaskQuerySyntax {
   const TaskQuerySyntax._();
 
-  static const List<String> logicalOperators = ['and', 'or', 'not'];
+  static const List<String> logicalOperators = ['and', 'or', 'not', 'xor'];
 
   static const Map<String, String> fieldAliases = {
     'pro': 'project',
@@ -54,6 +54,22 @@ class TaskQuerySyntax {
     'blocking',
     'waiting',
     'wait',
+    'priority',
+    'until',
+    'instance',
+    'latest',
+    'tagged',
+    'unblocked',
+    'annotated',
+    'scheduled',
+    'tomorrow',
+    'yesterday',
+    'week',
+    'month',
+    'quarter',
+    'year',
+    'uda',
+    'orphan',
   ];
 
   static const List<String> dateFieldNames = [
@@ -69,13 +85,23 @@ class TaskQuerySyntax {
 
   static const List<String> dateOperatorNames = [
     'before',
+    'under',
+    'below',
     'beforeeq',
+    'by',
     'after',
+    'over',
+    'above',
     'aftereq',
     'on',
     'none',
     'any',
   ];
+
+  static const Map<String, String> statusAliases = {
+    'done': 'completed',
+    'complete': 'completed',
+  };
 
   static const List<String> dateLiteralNames = [
     'today',
@@ -88,6 +114,27 @@ class TaskQuerySyntax {
     'eom',
     'soy',
     'eoy',
+  ];
+
+  static const List<String> attributeModifierNames = [
+    'has',
+    'hasnt',
+    'startswith',
+    'endswith',
+    'contains',
+    'isnt',
+    'not',
+  ];
+
+  static const List<String> comparisonOperatorNames = [
+    '==',
+    '!=',
+    '!==',
+    '=',
+    '>',
+    '<',
+    '>=',
+    '<=',
   ];
 
   static String canonicalKey(String key) => fieldAliases[key] ?? key;

@@ -2,13 +2,14 @@ use super::models::TaskStatus;
 use super::utils::map_tc_to_status;
 use taskchampion::{
     Status as TcStatus,
-    chrono::{DateTime, Datelike, Duration, TimeZone, Utc},
+    chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Timelike, Utc},
 };
 
 #[derive(Debug, Clone)]
 enum Expr {
     And(Vec<Expr>),
     Or(Vec<Expr>),
+    Xor(Vec<Expr>),
     Not(Box<Expr>),
     Term(Term),
 }
@@ -17,6 +18,8 @@ enum Expr {
 enum Term {
     Text(String),
     Tag(String),
+    TagNone,
+    TagAny,
     Project(String),
     Status(TaskStatus),
     Priority(String),
@@ -27,10 +30,53 @@ enum Term {
         value: Option<DateTime<Utc>>,
     },
     Flag(Flag),
+    Equals {
+        key: String,
+        value: String,
+    },
+    NotEquals {
+        key: String,
+        value: String,
+    },
+    StrictNotEquals {
+        key: String,
+        value: String,
+    },
+    Pattern(String),
+    Uuid(String),
     Uda {
         key: String,
         value: String,
     },
+    StrMatch {
+        key: String,
+        op: StrOp,
+        value: String,
+    },
+    Compare {
+        key: String,
+        op: CompareOp,
+        value: String,
+    },
+    Negated(Box<Term>),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum StrOp {
+    Has,
+    Hasnt,
+    StartsWith,
+    EndsWith,
+    Contains,
+    Isnt,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CompareOp {
+    Lt,
+    LtEq,
+    Gt,
+    GtEq,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -69,6 +115,22 @@ enum Flag {
     Blocked,
     Blocking,
     Waiting,
+    Priority,
+    Until,
+    Instance,
+    Latest,
+    Tagged,
+    Unblocked,
+    Annotated,
+    Scheduled,
+    Tomorrow,
+    Yesterday,
+    Week,
+    Month,
+    Quarter,
+    Year,
+    Uda,
+    Orphan,
 }
 
 const TASKWARRIOR_DEFAULT_DUE_DAYS: i64 = 7;
@@ -79,7 +141,7 @@ pub fn matches_query(task: &taskchampion::Task, query: &str) -> bool {
         return true;
     }
 
-    let tokens = merge_colon_tokens(tokenize(trimmed));
+    let tokens = merge_comparison_tokens(merge_colon_tokens(tokenize(trimmed)));
     let mut parser = Parser::new(tokens);
     match parser.parse() {
         Some(expr) => evaluate_expr(&expr, task, Utc::now()),
@@ -91,6 +153,15 @@ fn evaluate_expr(expr: &Expr, task: &taskchampion::Task, now: DateTime<Utc>) -> 
     match expr {
         Expr::And(children) => children.iter().all(|child| evaluate_expr(child, task, now)),
         Expr::Or(children) => children.iter().any(|child| evaluate_expr(child, task, now)),
+        Expr::Xor(children) => {
+            children.iter().fold(0usize, |count, child| {
+                if evaluate_expr(child, task, now) {
+                    count + 1
+                } else {
+                    count
+                }
+            }) == 1
+        }
         Expr::Not(child) => !evaluate_expr(child, task, now),
         Expr::Term(term) => evaluate_term(term, task, now),
     }
@@ -102,8 +173,14 @@ fn evaluate_term(term: &Term, task: &taskchampion::Task, now: DateTime<Utc>) -> 
         Term::Tag(tag) => {
             let lower_tag = tag.to_lowercase();
             task.get_tags()
-                .any(|existing| existing.to_string().to_lowercase() == lower_tag)
+                .any(|existing| existing.to_string().to_lowercase().contains(&lower_tag))
         }
+        Term::TagNone => !task
+            .get_tags()
+            .any(|t| !is_virtual_tag_name(&t.to_string())),
+        Term::TagAny => task
+            .get_tags()
+            .any(|t| !is_virtual_tag_name(&t.to_string())),
         Term::Project(project) => {
             let task_project = task.get_value("project");
             if project.eq_ignore_ascii_case("none") {
@@ -131,13 +208,133 @@ fn evaluate_term(term: &Term, task: &taskchampion::Task, now: DateTime<Utc>) -> 
             .starts_with(&prefix.to_lowercase()),
         Term::Date { field, op, value } => evaluate_date_term(task, *field, *op, *value),
         Term::Flag(flag) => evaluate_flag(task, *flag, now),
+        Term::Equals { key, value } => {
+            let task_val = read_attribute(task, key);
+            task_val.eq_ignore_ascii_case(value)
+        }
+        Term::NotEquals { key, value } => {
+            let task_val = read_attribute(task, key);
+            !task_val.eq_ignore_ascii_case(value)
+        }
+        Term::StrictNotEquals { key, value } => {
+            let task_val = read_attribute(task, key);
+            task_val != *value
+        }
+        Term::Pattern(pattern) => {
+            let desc = task.get_description().to_lowercase();
+            let pat = pattern.to_lowercase();
+            desc.contains(&pat)
+        }
+        Term::Uuid(prefix) => {
+            task.get_uuid().to_string().eq_ignore_ascii_case(prefix)
+                || task
+                    .get_uuid()
+                    .to_string()
+                    .to_lowercase()
+                    .starts_with(&prefix.to_lowercase())
+        }
         Term::Uda { key, value } => {
             let lower_value = value.to_lowercase();
             task.get_user_defined_attributes().any(|(k, v)| {
                 k.eq_ignore_ascii_case(key) && v.to_lowercase().contains(&lower_value)
             })
         }
+        Term::StrMatch { key, op, value } => {
+            let attr = read_attribute(task, key).to_lowercase();
+            let val = value.to_lowercase();
+            match op {
+                StrOp::Has | StrOp::Contains => attr.contains(&val),
+                StrOp::Hasnt => !attr.contains(&val),
+                StrOp::StartsWith => attr.starts_with(&val),
+                StrOp::EndsWith => attr.ends_with(&val),
+                StrOp::Isnt => {
+                    let words: Vec<&str> = attr
+                        .split(|c: char| !c.is_alphanumeric())
+                        .filter(|w| !w.is_empty())
+                        .collect();
+                    !words.iter().any(|&w| w == val.as_str())
+                }
+            }
+        }
+        Term::Compare { key, op, value } => {
+            let attr = read_attribute(task, key);
+            match key.as_str() {
+                "priority" => {
+                    let rank = |p: &str| -> u8 {
+                        match p.to_ascii_uppercase().as_str() {
+                            "H" => 3,
+                            "M" => 2,
+                            "L" => 1,
+                            _ => 0,
+                        }
+                    };
+                    let a = rank(&attr);
+                    let b = rank(value);
+                    match op {
+                        CompareOp::Gt => a > b,
+                        CompareOp::GtEq => a >= b,
+                        CompareOp::Lt => a < b,
+                        CompareOp::LtEq => a <= b,
+                    }
+                }
+                _ => {
+                    // Lexicographic comparison for strings, f32 parse for numeric fields
+                    if let (Ok(a), Ok(b)) = (attr.parse::<f32>(), value.parse::<f32>()) {
+                        match op {
+                            CompareOp::Gt => a > b,
+                            CompareOp::GtEq => a >= b,
+                            CompareOp::Lt => a < b,
+                            CompareOp::LtEq => a <= b,
+                        }
+                    } else {
+                        let val = value.to_lowercase();
+                        let a = attr.to_lowercase();
+                        match op {
+                            CompareOp::Gt => a > val,
+                            CompareOp::GtEq => a >= val,
+                            CompareOp::Lt => a < val,
+                            CompareOp::LtEq => a <= val,
+                        }
+                    }
+                }
+            }
+        }
+        Term::Negated(inner) => !evaluate_term(inner, task, now),
     }
+}
+
+fn read_attribute(task: &taskchampion::Task, key: &str) -> String {
+    match key {
+        "description" | "desc" => task.get_description().to_string(),
+        "project" => task.get_value("project").unwrap_or_default().to_string(),
+        "status" => {
+            let s = map_tc_to_status(task.get_status());
+            match s {
+                TaskStatus::Pending => "pending".to_string(),
+                TaskStatus::Completed => "completed".to_string(),
+                TaskStatus::Deleted => "deleted".to_string(),
+                TaskStatus::Recurring => "recurring".to_string(),
+            }
+        }
+        "priority" => task.get_priority().to_string(),
+        "uuid" => task.get_uuid().to_string(),
+        "due" => task.get_due().map(|d| d.to_rfc3339()).unwrap_or_default(),
+        "wait" => task.get_wait().map(|d| d.to_rfc3339()).unwrap_or_default(),
+        "entry" => task.get_entry().map(|d| d.to_rfc3339()).unwrap_or_default(),
+        "modified" => task
+            .get_modified()
+            .map(|d| d.to_rfc3339())
+            .unwrap_or_default(),
+        "start" => task.get_value("start").unwrap_or_default().to_string(),
+        "end" => task.get_value("end").unwrap_or_default().to_string(),
+        "scheduled" => task.get_value("scheduled").unwrap_or_default().to_string(),
+        "until" => task.get_value("until").unwrap_or_default().to_string(),
+        other => task.get_value(other).unwrap_or_default().to_string(),
+    }
+}
+
+fn is_midnight(dt: &DateTime<Utc>) -> bool {
+    dt.hour() == 0 && dt.minute() == 0 && dt.second() == 0 && dt.nanosecond() == 0
 }
 
 fn evaluate_date_term(
@@ -151,19 +348,43 @@ fn evaluate_date_term(
         DateOp::None => task_value.is_none(),
         DateOp::Any => task_value.is_some(),
         DateOp::Before => match (task_value, target) {
-            (Some(value), Some(target)) => value < target,
+            (Some(value), Some(target)) => {
+                if is_midnight(&target) {
+                    value.date_naive() < target.date_naive()
+                } else {
+                    value < target
+                }
+            }
             _ => false,
         },
         DateOp::BeforeEq => match (task_value, target) {
-            (Some(value), Some(target)) => value <= target,
+            (Some(value), Some(target)) => {
+                if is_midnight(&target) {
+                    value.date_naive() <= target.date_naive()
+                } else {
+                    value <= target
+                }
+            }
             _ => false,
         },
         DateOp::After => match (task_value, target) {
-            (Some(value), Some(target)) => value > target,
+            (Some(value), Some(target)) => {
+                if is_midnight(&target) {
+                    value.date_naive() > target.date_naive()
+                } else {
+                    value > target
+                }
+            }
             _ => false,
         },
         DateOp::AfterEq => match (task_value, target) {
-            (Some(value), Some(target)) => value >= target,
+            (Some(value), Some(target)) => {
+                if is_midnight(&target) {
+                    value.date_naive() >= target.date_naive()
+                } else {
+                    value >= target
+                }
+            }
             _ => false,
         },
         DateOp::On => match (task_value, target) {
@@ -196,7 +417,92 @@ fn evaluate_flag(task: &taskchampion::Task, flag: Flag, now: DateTime<Utc>) -> b
         Flag::Blocked => task.is_blocked(),
         Flag::Blocking => task.is_blocking(),
         Flag::Waiting => is_waiting_at(task, now),
+        Flag::Priority => !task.get_priority().trim().is_empty(),
+        Flag::Until => task.get_value("until").is_some_and(|v| !v.is_empty()),
+        Flag::Instance => {
+            task.get_value("template").is_some_and(|v| !v.is_empty())
+                || task.get_value("parent").is_some_and(|v| !v.is_empty())
+        }
+        Flag::Latest => true,
+        Flag::Tagged => task
+            .get_tags()
+            .any(|t| !is_virtual_tag_name(&t.to_string())),
+        Flag::Unblocked => !task.is_blocked(),
+        Flag::Annotated => task.get_annotations().count() > 0,
+        Flag::Scheduled => task.get_value("scheduled").is_some_and(|v| !v.is_empty()),
+        Flag::Tomorrow => read_date_field(task, DateField::Due).is_some_and(|date| {
+            let tomorrow = today_midnight(now) + Duration::days(1);
+            date.date_naive() == tomorrow.date_naive()
+        }),
+        Flag::Yesterday => read_date_field(task, DateField::Due).is_some_and(|date| {
+            let yesterday = today_midnight(now) - Duration::days(1);
+            date.date_naive() == yesterday.date_naive()
+        }),
+        Flag::Week => read_date_field(task, DateField::Due).is_some_and(|date| {
+            let t = today_midnight(now);
+            let shift = now.weekday().num_days_from_monday() as i64;
+            let sow = t - Duration::days(shift);
+            let eow = sow + Duration::days(6);
+            date.date_naive() >= sow.date_naive() && date.date_naive() <= eow.date_naive()
+        }),
+        Flag::Month => read_date_field(task, DateField::Due).is_some_and(|date| {
+            let t = today_midnight(now);
+            let som = Utc
+                .with_ymd_and_hms(now.year(), now.month(), 1, 0, 0, 0)
+                .single()
+                .unwrap_or(t);
+            let (y, m) = if now.month() == 12 {
+                (now.year() + 1, 1)
+            } else {
+                (now.year(), now.month() + 1)
+            };
+            let eom =
+                Utc.with_ymd_and_hms(y, m, 1, 0, 0, 0).single().unwrap_or(t) - Duration::seconds(1);
+            date.date_naive() >= som.date_naive() && date.date_naive() <= eom.date_naive()
+        }),
+        Flag::Quarter => read_date_field(task, DateField::Due).is_some_and(|date| {
+            let t = today_midnight(now);
+            let q = (now.month() - 1) / 3;
+            let start_month = q * 3 + 1;
+            let soq = Utc
+                .with_ymd_and_hms(now.year(), start_month, 1, 0, 0, 0)
+                .single()
+                .unwrap_or(t);
+            let (eq_year, eq_month) = if start_month + 3 > 12 {
+                (now.year() + 1, 1)
+            } else {
+                (now.year(), start_month + 3)
+            };
+            let eoq = Utc
+                .with_ymd_and_hms(eq_year, eq_month, 1, 0, 0, 0)
+                .single()
+                .unwrap_or(t)
+                - Duration::seconds(1);
+            date.date_naive() >= soq.date_naive() && date.date_naive() <= eoq.date_naive()
+        }),
+        Flag::Year => read_date_field(task, DateField::Due).is_some_and(|date| {
+            let t = today_midnight(now);
+            let soy = Utc
+                .with_ymd_and_hms(now.year(), 1, 1, 0, 0, 0)
+                .single()
+                .unwrap_or(t);
+            let eoy = Utc
+                .with_ymd_and_hms(now.year(), 12, 31, 23, 59, 59)
+                .single()
+                .unwrap_or(t);
+            date.date_naive() >= soy.date_naive() && date.date_naive() <= eoy.date_naive()
+        }),
+        Flag::Uda => task.get_user_defined_attributes().count() > 0,
+        Flag::Orphan => task.get_user_defined_attributes().any(|(k, _)| {
+            !k.starts_with("annotation_") && !k.starts_with("tag_") && !k.starts_with("dep_")
+        }),
     }
+}
+
+fn today_midnight(now: DateTime<Utc>) -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(now.year(), now.month(), now.day(), 0, 0, 0)
+        .single()
+        .unwrap_or(now)
 }
 
 fn read_date_field(task: &taskchampion::Task, field: DateField) -> Option<DateTime<Utc>> {
@@ -279,11 +585,11 @@ impl Parser {
     }
 
     fn parse_or(&mut self) -> Option<Expr> {
-        let first = self.parse_and()?;
+        let first = self.parse_xor()?;
         let mut parts = vec![first];
         while self.peek_is_or() {
             self.index += 1;
-            match self.parse_and() {
+            match self.parse_xor() {
                 Some(rhs) => parts.push(rhs),
                 None => break,
             }
@@ -295,10 +601,27 @@ impl Parser {
         }
     }
 
+    fn parse_xor(&mut self) -> Option<Expr> {
+        let first = self.parse_and()?;
+        let mut parts = vec![first];
+        while self.peek_is_xor() {
+            self.index += 1;
+            match self.parse_and() {
+                Some(rhs) => parts.push(rhs),
+                None => break,
+            }
+        }
+        if parts.len() == 1 {
+            parts.into_iter().next()
+        } else {
+            Some(Expr::Xor(parts))
+        }
+    }
+
     fn parse_and(&mut self) -> Option<Expr> {
         let mut parts = Vec::new();
         while let Some(token) = self.peek() {
-            if token == ")" || self.peek_is_or() {
+            if token == ")" || self.peek_is_or() || self.peek_is_xor() {
                 break;
             }
             if self.peek_is_and() {
@@ -372,6 +695,10 @@ impl Parser {
         matches!(self.peek(), Some("and") | Some("AND") | Some("&&"))
     }
 
+    fn peek_is_xor(&self) -> bool {
+        matches!(self.peek(), Some("xor") | Some("XOR"))
+    }
+
     fn peek_is_not(&self) -> bool {
         matches!(self.peek(), Some("not") | Some("NOT") | Some("!"))
     }
@@ -382,13 +709,94 @@ fn parse_term(token: &str) -> Term {
         return term;
     }
 
+    if let Some(pattern) = token.strip_prefix("__pattern__") {
+        return Term::Pattern(pattern.to_string());
+    }
+
     if let Some((raw_key, raw_value)) = token.split_once(':') {
         let key = canonical_key(raw_key);
         let value = strip_quotes(raw_value);
 
+        // Handle key.not:value → Negated(Term)
+        if let Some(not_key) = key.strip_suffix(".not") {
+            let inner = parse_term(&format!("{not_key}:{value}"));
+            return Term::Negated(Box::new(inner));
+        }
+
+        // Handle key.has:value / key.hasnt:value / key.startswith:value / key.endswith:value / key.contains:value / key.isnt:value
+        if let Some((base_key, modifier)) = key.rsplit_once('.') {
+            let op = match modifier {
+                "has" => Some(StrOp::Has),
+                "hasnt" => Some(StrOp::Hasnt),
+                "startswith" => Some(StrOp::StartsWith),
+                "endswith" => Some(StrOp::EndsWith),
+                "contains" => Some(StrOp::Contains),
+                "isnt" => Some(StrOp::Isnt),
+                _ => None,
+            };
+            if let Some(op) = op {
+                return Term::StrMatch {
+                    key: base_key.to_string(),
+                    op,
+                    value,
+                };
+            }
+        }
+
+        // Handle tags.none: / project.none: / priority.above: / priority.below:
+        if let Some((base_key, modifier)) = key.rsplit_once('.') {
+            let canonical_base = canonical_key(base_key);
+            match modifier {
+                "none" => match canonical_base.as_str() {
+                    "tag" | "tags" => return Term::TagNone,
+                    "project" => return Term::Project("none".to_string()),
+                    _ => {}
+                },
+                "any" => match canonical_base.as_str() {
+                    "tag" | "tags" => return Term::TagAny,
+                    _ => {}
+                },
+                "above" | "over" => {
+                    if canonical_base == "priority" {
+                        return Term::Compare {
+                            key: "priority".to_string(),
+                            op: CompareOp::Gt,
+                            value: value.to_string(),
+                        };
+                    }
+                    if parse_date_field(&canonical_base).is_some() {
+                        if let Some(term) = parse_date_term(&key, &value) {
+                            return term;
+                        }
+                    }
+                }
+                "below" | "under" => {
+                    if canonical_base == "priority" {
+                        return Term::Compare {
+                            key: "priority".to_string(),
+                            op: CompareOp::Lt,
+                            value: value.to_string(),
+                        };
+                    }
+                    if parse_date_field(&canonical_base).is_some() {
+                        if let Some(term) = parse_date_term(&key, &value) {
+                            return term;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
         match key.as_str() {
             "project" => return Term::Project(value),
-            "tag" | "tags" => return Term::Tag(value),
+            "tag" | "tags" => {
+                return match value.to_ascii_lowercase().as_str() {
+                    "none" => Term::TagNone,
+                    "any" => Term::TagAny,
+                    _ => Term::Tag(value),
+                };
+            }
             "status" => {
                 if let Some(status) = parse_status(&value) {
                     return Term::Status(status);
@@ -397,7 +805,7 @@ fn parse_term(token: &str) -> Term {
             "priority" => return Term::Priority(value),
             "uuid" => return Term::UuidPrefix(value),
             "wait" if value.eq_ignore_ascii_case("someday") => return Term::Flag(Flag::Someday),
-            "due" | "wait" | "scheduled" | "entry" | "modified" | "start" | "end" | "until" => {
+            _ if parse_date_field(key.split('.').next().unwrap_or(&key)).is_some() => {
                 if let Some(term) = parse_date_term(&key, &value) {
                     return term;
                 }
@@ -416,17 +824,64 @@ fn parse_term(token: &str) -> Term {
         }
     }
 
+    // Handle field.none / field.any / tags.none / project.none without colon (e.g. due.none, tags.none)
+    if let Some(dot_pos) = token.find('.') {
+        let field_part = &token[..dot_pos];
+        let op_part = &token[dot_pos + 1..];
+        match op_part {
+            "none" => {
+                if let Some(field) = parse_date_field(field_part) {
+                    return Term::Date {
+                        field,
+                        op: DateOp::None,
+                        value: None,
+                    };
+                }
+                let canonical = canonical_key(field_part);
+                match canonical.as_str() {
+                    "tag" | "tags" => return Term::TagNone,
+                    "project" => return Term::Project("none".to_string()),
+                    _ => {}
+                }
+            }
+            "any" => {
+                if let Some(field) = parse_date_field(field_part) {
+                    return Term::Date {
+                        field,
+                        op: DateOp::Any,
+                        value: None,
+                    };
+                }
+                let canonical = canonical_key(field_part);
+                match canonical.as_str() {
+                    "tag" | "tags" => return Term::TagAny,
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
     if let Some(status) = parse_status(token) {
         return Term::Status(status);
     }
     if let Some(flag) = parse_flag(token) {
         return Term::Flag(flag);
     }
+    if looks_like_uuid(token) {
+        return Term::Uuid(token.to_string());
+    }
     Term::Text(strip_quotes(token))
 }
 
 fn parse_comparison(token: &str) -> Option<Term> {
-    let (raw_key, op_token, raw_value) = if let Some((left, right)) = token.split_once("<=") {
+    let (raw_key, op_token, raw_value) = if let Some((left, right)) = token.split_once("!==") {
+        (left, "!==", right)
+    } else if let Some((left, right)) = token.split_once("!=") {
+        (left, "!=", right)
+    } else if let Some((left, right)) = token.split_once("==") {
+        (left, "==", right)
+    } else if let Some((left, right)) = token.split_once("<=") {
         (left, "<=", right)
     } else if let Some((left, right)) = token.split_once(">=") {
         (left, ">=", right)
@@ -441,21 +896,54 @@ fn parse_comparison(token: &str) -> Option<Term> {
     };
 
     let key = canonical_key(raw_key);
-    let field = parse_date_field(&key)?;
-    let op = match op_token {
-        "<" => DateOp::Before,
-        "<=" => DateOp::BeforeEq,
-        ">" => DateOp::After,
-        ">=" => DateOp::AfterEq,
-        "=" => DateOp::On,
-        _ => DateOp::On,
-    };
-    let value = parse_date_expr(raw_value.trim())?;
-    Some(Term::Date {
-        field,
-        op,
-        value: Some(value),
-    })
+
+    if let Some(field) = parse_date_field(&key) {
+        let op = match op_token {
+            "<" => DateOp::Before,
+            "<=" => DateOp::BeforeEq,
+            ">" => DateOp::After,
+            ">=" => DateOp::AfterEq,
+            "=" | "==" => DateOp::On,
+            _ => DateOp::On,
+        };
+        let value = parse_date_expr(raw_value.trim())?;
+        return Some(Term::Date {
+            field,
+            op,
+            value: Some(value),
+        });
+    }
+
+    match op_token {
+        "==" => Some(Term::Equals {
+            key,
+            value: raw_value.trim().to_string(),
+        }),
+        "!=" => Some(Term::NotEquals {
+            key,
+            value: raw_value.trim().to_string(),
+        }),
+        "!==" => Some(Term::StrictNotEquals {
+            key,
+            value: raw_value.trim().to_string(),
+        }),
+        "=" => Some(Term::Equals {
+            key: key.clone(),
+            value: raw_value.trim().to_string(),
+        }),
+        ">" | "<" | ">=" | "<=" => {
+            let value = raw_value.trim().to_string();
+            let op = match op_token {
+                ">" => CompareOp::Gt,
+                "<" => CompareOp::Lt,
+                ">=" => CompareOp::GtEq,
+                "<=" => CompareOp::LtEq,
+                _ => unreachable!(),
+            };
+            Some(Term::Compare { key, op, value })
+        }
+        _ => None,
+    }
 }
 
 fn parse_date_term(key: &str, value: &str) -> Option<Term> {
@@ -467,15 +955,25 @@ fn parse_date_term(key: &str, value: &str) -> Option<Term> {
 
     let field = parse_date_field(field_name)?;
     let op = match op_name {
-        "before" => DateOp::Before,
-        "beforeeq" => DateOp::BeforeEq,
-        "after" => DateOp::After,
+        "before" | "under" | "below" => DateOp::Before,
+        "beforeeq" | "by" => DateOp::BeforeEq,
+        "after" | "over" | "above" => DateOp::After,
         "aftereq" => DateOp::AfterEq,
-        "on" => DateOp::On,
+        "on" => match value.to_ascii_lowercase().as_str() {
+            "none" => DateOp::None,
+            "any" => DateOp::Any,
+            _ => DateOp::On,
+        },
         "none" => DateOp::None,
         "any" => DateOp::Any,
         _ => DateOp::On,
     };
+    // Handle due.not:date as DateOp::On (same equality), negate at Term level
+    let field_name_str = field_name.to_string();
+    if op_name == "not" {
+        let inner = parse_date_term(&field_name_str, value)?;
+        return Some(Term::Negated(Box::new(inner)));
+    }
     let parsed_value = match op {
         DateOp::None | DateOp::Any => None,
         _ => Some(parse_date_expr(value)?),
@@ -555,6 +1053,26 @@ fn parse_date_expr(raw: &str) -> Option<DateTime<Utc>> {
         let relative = match unit {
             'd' => today + Duration::days(amount),
             'w' => today + Duration::weeks(amount),
+            'h' => now + Duration::hours(amount),
+            'n' => now + Duration::minutes(amount),
+            's' => now + Duration::seconds(amount),
+            'q' => {
+                let mut year = now.year();
+                let mut month = now.month() as i32 + amount as i32 * 3;
+                while month > 12 {
+                    month -= 12;
+                    year += 1;
+                }
+                while month < 1 {
+                    month += 12;
+                    year -= 1;
+                }
+                let max_day = days_in_month(year, month as u32);
+                let day = now.day().min(max_day);
+                Utc.with_ymd_and_hms(year, month as u32, day, 0, 0, 0)
+                    .single()
+                    .unwrap_or(today)
+            }
             'm' => {
                 let mut year = now.year();
                 let mut month = now.month() as i32 + amount as i32;
@@ -585,6 +1103,12 @@ fn parse_date_expr(raw: &str) -> Option<DateTime<Utc>> {
         return Some(relative);
     }
 
+    if let Ok(naive) = NaiveDate::parse_from_str(raw, "%Y-%m-%d") {
+        return Utc
+            .with_ymd_and_hms(naive.year(), naive.month(), naive.day(), 0, 0, 0)
+            .single();
+    }
+
     DateTime::parse_from_rfc3339(raw)
         .ok()
         .map(|dt| dt.with_timezone(&Utc))
@@ -609,13 +1133,88 @@ fn parse_relative(value: &str) -> Option<(i64, char)> {
     if value.len() < 2 {
         return None;
     }
+
+    let lower = value.to_ascii_lowercase();
+
+    for (suffix, unit) in [
+        ("hours", 'h'),
+        ("hrs", 'h'),
+        ("minutes", 'n'),
+        ("mins", 'n'),
+        ("min", 'n'),
+        ("mn", 'n'),
+        ("seconds", 's'),
+        ("secs", 's'),
+        ("weeks", 'w'),
+        ("ws", 'w'),
+        ("months", 'm'),
+        ("mths", 'm'),
+        ("quarters", 'q'),
+        ("qtrs", 'q'),
+        ("years", 'y'),
+        ("yrs", 'y'),
+    ] {
+        if lower.ends_with(suffix) {
+            let num_part = &value[..value.len() - suffix.len()];
+            if let Ok(amount) = num_part.parse::<i64>() {
+                return Some((amount, unit));
+            }
+        }
+    }
+
     let unit = value.chars().last()?;
-    if !matches!(unit, 'd' | 'w' | 'm' | 'y') {
+    if !matches!(unit, 'd' | 'w' | 'm' | 'y' | 'h' | 'n' | 's' | 'q') {
         return None;
     }
     let number = &value[..value.len() - 1];
     let amount = number.parse::<i64>().ok()?;
     Some((amount, unit))
+}
+
+fn is_virtual_tag_name(tag: &str) -> bool {
+    matches!(
+        tag,
+        "BLOCKED"
+            | "UNBLOCKED"
+            | "BLOCKING"
+            | "DUE"
+            | "DUETODAY"
+            | "TODAY"
+            | "OVERDUE"
+            | "WEEK"
+            | "MONTH"
+            | "QUARTER"
+            | "YEAR"
+            | "ACTIVE"
+            | "SCHEDULED"
+            | "PARENT"
+            | "CHILD"
+            | "UNTIL"
+            | "WAITING"
+            | "ANNOTATED"
+            | "READY"
+            | "YESTERDAY"
+            | "TOMORROW"
+            | "TAGGED"
+            | "PENDING"
+            | "COMPLETED"
+            | "DELETED"
+            | "UDA"
+            | "ORPHAN"
+            | "PRIORITY"
+            | "PROJECT"
+            | "LATEST"
+            | "INSTANCE"
+    )
+}
+
+fn looks_like_uuid(token: &str) -> bool {
+    let t = token.replace('-', "");
+    let len = t.len();
+    if !(8..=32).contains(&len) {
+        return false;
+    }
+    t.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 fn parse_status(value: &str) -> Option<TaskStatus> {
@@ -641,6 +1240,22 @@ fn parse_flag(value: &str) -> Option<Flag> {
         "blocked" => Some(Flag::Blocked),
         "blocking" => Some(Flag::Blocking),
         "waiting" | "wait" => Some(Flag::Waiting),
+        "priority" => Some(Flag::Priority),
+        "until" => Some(Flag::Until),
+        "instance" => Some(Flag::Instance),
+        "latest" => Some(Flag::Latest),
+        "tagged" => Some(Flag::Tagged),
+        "unblocked" => Some(Flag::Unblocked),
+        "annotated" => Some(Flag::Annotated),
+        "scheduled" => Some(Flag::Scheduled),
+        "tomorrow" => Some(Flag::Tomorrow),
+        "yesterday" => Some(Flag::Yesterday),
+        "week" => Some(Flag::Week),
+        "month" => Some(Flag::Month),
+        "quarter" => Some(Flag::Quarter),
+        "year" => Some(Flag::Year),
+        "uda" => Some(Flag::Uda),
+        "orphan" => Some(Flag::Orphan),
         _ => None,
     }
 }
@@ -699,6 +1314,18 @@ fn tokenize(input: &str) -> Vec<String> {
             i += 1;
             continue;
         }
+        if ch == '/' && buffer.is_empty() {
+            let start = i + 1;
+            if let Some(end) = chars[start..].iter().position(|&c| c == '/') {
+                let pattern = chars[start..start + end].iter().collect::<String>();
+                if !pattern.is_empty() {
+                    flush(&mut tokens, &mut buffer);
+                    tokens.push(format!("__pattern__{pattern}"));
+                    i = start + end + 1;
+                    continue;
+                }
+            }
+        }
         if ch == '(' || ch == ')' {
             flush(&mut tokens, &mut buffer);
             tokens.push(ch.to_string());
@@ -732,6 +1359,35 @@ fn tokenize(input: &str) -> Vec<String> {
     tokens
 }
 
+fn merge_comparison_tokens(tokens: Vec<String>) -> Vec<String> {
+    let ops = ["==", "!=", "<=", ">=", "<", ">", "="];
+    let mut result = Vec::with_capacity(tokens.len());
+    let mut i = 0;
+    while i < tokens.len() {
+        if i + 2 < tokens.len() {
+            let left = &tokens[i];
+            let mid = &tokens[i + 1];
+            let right = &tokens[i + 2];
+            if ops.contains(&mid.as_str())
+                && !left.starts_with('+')
+                && !left.starts_with('-')
+                && left != "("
+                && left != ")"
+                && !matches!(left.as_str(), "and" | "AND" | "or" | "OR" | "not" | "NOT")
+                && !right.starts_with('(')
+                && !matches!(right.as_str(), "and" | "AND" | "or" | "OR" | "not" | "NOT")
+            {
+                result.push(format!("{left}{mid}{right}"));
+                i += 3;
+                continue;
+            }
+        }
+        result.push(tokens[i].clone());
+        i += 1;
+    }
+    result
+}
+
 fn merge_colon_tokens(tokens: Vec<String>) -> Vec<String> {
     let mut result = Vec::with_capacity(tokens.len());
     let mut i = 0;
@@ -753,69 +1409,79 @@ fn merge_colon_tokens(tokens: Vec<String>) -> Vec<String> {
     result
 }
 
+pub(crate) fn task_with(fields: &[(&str, &str)]) -> taskchampion::Task {
+    use std::str::FromStr;
+    use taskchampion::Tag;
+
+    let mut replica = taskchampion::Replica::new(
+        taskchampion::StorageConfig::InMemory
+            .into_storage()
+            .unwrap(),
+    );
+    let mut ops = taskchampion::Operations::new();
+    let uuid = taskchampion::Uuid::new_v4();
+    let mut task = replica.create_task(uuid, &mut ops).unwrap();
+    task.set_description("test task".into(), &mut ops).unwrap();
+    task.set_status(taskchampion::Status::Pending, &mut ops)
+        .unwrap();
+    task.set_entry(Some(Utc::now()), &mut ops).unwrap();
+
+    for (key, value) in fields {
+        match *key {
+            "due" => {
+                let dt = DateTime::parse_from_rfc3339(value)
+                    .unwrap()
+                    .with_timezone(&Utc);
+                task.set_due(Some(dt), &mut ops).unwrap();
+            }
+            "wait" => {
+                let dt = DateTime::parse_from_rfc3339(value)
+                    .unwrap()
+                    .with_timezone(&Utc);
+                task.set_wait(Some(dt), &mut ops).unwrap();
+            }
+            "scheduled" => {
+                let dt = DateTime::parse_from_rfc3339(value)
+                    .unwrap()
+                    .with_timezone(&Utc);
+                task.set_value("scheduled", Some(dt.to_rfc3339()), &mut ops)
+                    .unwrap();
+            }
+            "project" => {
+                task.set_value("project", Some(value.to_string()), &mut ops)
+                    .unwrap();
+            }
+            "priority" => task.set_priority(value.to_string(), &mut ops).unwrap(),
+            "tag" => {
+                let tag: Tag = FromStr::from_str(value).unwrap();
+                task.add_tag(&tag, &mut ops).unwrap();
+            }
+            "status" => {
+                let status = match *value {
+                    "pending" => taskchampion::Status::Pending,
+                    "completed" => taskchampion::Status::Completed,
+                    "deleted" => taskchampion::Status::Deleted,
+                    _ => panic!("unknown status: {value}"),
+                };
+                task.set_status(status, &mut ops).unwrap();
+            }
+            "description" => task.set_description(value.to_string(), &mut ops).unwrap(),
+            _ => {}
+        }
+    }
+
+    replica.commit_operations(ops).unwrap();
+    replica.get_task(uuid).unwrap().unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use taskchampion::{
-        Operations, Replica, Status as TcStatus, StorageConfig, Uuid,
-    };
 
     fn parse_expr(query: &str) -> Option<Expr> {
         let tokens = merge_colon_tokens(tokenize(query));
         let mut parser = Parser::new(tokens);
         parser.parse()
-    }
-
-    fn task_with(fields: &[(&str, &str)]) -> taskchampion::Task {
-        use std::str::FromStr;
-        use taskchampion::Tag;
-
-        let mut replica = Replica::new(StorageConfig::InMemory.into_storage().unwrap());
-        let mut ops = Operations::new();
-        let uuid = Uuid::new_v4();
-        let mut task = replica.create_task(uuid, &mut ops).unwrap();
-        task.set_description("test task".into(), &mut ops).unwrap();
-        task.set_status(TcStatus::Pending, &mut ops).unwrap();
-        task.set_entry(Some(Utc::now()), &mut ops).unwrap();
-
-        for (key, value) in fields {
-            match *key {
-                "due" => {
-                    let dt = DateTime::parse_from_rfc3339(value).unwrap().with_timezone(&Utc);
-                    task.set_due(Some(dt), &mut ops).unwrap();
-                }
-                "wait" => {
-                    let dt = DateTime::parse_from_rfc3339(value).unwrap().with_timezone(&Utc);
-                    task.set_wait(Some(dt), &mut ops).unwrap();
-                }
-                "scheduled" => {
-                    let dt = DateTime::parse_from_rfc3339(value).unwrap().with_timezone(&Utc);
-                    task.set_value("scheduled", Some(dt.to_rfc3339()), &mut ops).unwrap();
-                }
-                "project" => {
-                    task.set_value("project", Some(value.to_string()), &mut ops).unwrap();
-                }
-                "priority" => task.set_priority(value.to_string(), &mut ops).unwrap(),
-                "tag" => {
-                    let tag: Tag = FromStr::from_str(value).unwrap();
-                    task.add_tag(&tag, &mut ops).unwrap();
-                }
-                "status" => {
-                    let status = match *value {
-                        "pending" => TcStatus::Pending,
-                        "completed" => TcStatus::Completed,
-                        "deleted" => TcStatus::Deleted,
-                        _ => panic!("unknown status: {value}"),
-                    };
-                    task.set_status(status, &mut ops).unwrap();
-                }
-                "description" => task.set_description(value.to_string(), &mut ops).unwrap(),
-                _ => {}
-            }
-        }
-
-        replica.commit_operations(ops).unwrap();
-        replica.get_task(uuid).unwrap().unwrap()
     }
 
     #[test]
@@ -833,19 +1499,6 @@ mod tests {
         match expr {
             Expr::Term(Term::Flag(Flag::Someday)) => {}
             other => panic!("expected someday flag term, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn invalid_date_terms_fall_back_to_text() {
-        match parse_term("due:not-a-date") {
-            Term::Text(value) => assert_eq!(value, "due:not-a-date"),
-            other => panic!("expected invalid date term to fall back to text, got {other:?}"),
-        }
-
-        match parse_term("due<=not-a-date") {
-            Term::Text(value) => assert_eq!(value, "due<=not-a-date"),
-            other => panic!("expected invalid comparison to fall back to text, got {other:?}"),
         }
     }
 
@@ -886,90 +1539,482 @@ mod tests {
     #[test]
     fn plus_due_matches_within_seven_day_window() {
         let now = taskchampion::chrono::Utc::now();
-        let due_soon = task_with(&[("due", &format!("{}", (now + chrono::Duration::days(6)).format("%+"))), ("status", "pending")]);
-        let due_later = task_with(&[("due", &format!("{}", (now + chrono::Duration::days(8)).format("%+"))), ("status", "pending")]);
+        let due_soon = task_with(&[
+            (
+                "due",
+                &format!("{}", (now + chrono::Duration::days(6)).format("%+")),
+            ),
+            ("status", "pending"),
+        ]);
+        let due_later = task_with(&[
+            (
+                "due",
+                &format!("{}", (now + chrono::Duration::days(8)).format("%+")),
+            ),
+            ("status", "pending"),
+        ]);
 
-        assert!(matches_query(&due_soon, "+DUE"), "task due within 7 days should match +DUE");
-        assert!(!matches_query(&due_later, "+DUE"), "task due after 7 days should not match +DUE");
+        assert!(
+            matches_query(&due_soon, "+DUE"),
+            "task due within 7 days should match +DUE"
+        );
+        assert!(
+            !matches_query(&due_later, "+DUE"),
+            "task due after 7 days should not match +DUE"
+        );
     }
 
     #[test]
     fn plus_ready_excludes_future_scheduled() {
         let now = taskchampion::chrono::Utc::now();
         let ready = task_with(&[("status", "pending")]);
-        let future = task_with(&[("scheduled", &format!("{}", (now + chrono::Duration::days(1)).format("%+"))), ("status", "pending")]);
+        let future = task_with(&[
+            (
+                "scheduled",
+                &format!("{}", (now + chrono::Duration::days(1)).format("%+")),
+            ),
+            ("status", "pending"),
+        ]);
 
-        assert!(matches_query(&ready, "+READY"), "pending task without schedule should be ready");
-        assert!(!matches_query(&future, "+READY"), "future scheduled task should not be ready");
+        assert!(
+            matches_query(&ready, "+READY"),
+            "pending task without schedule should be ready"
+        );
+        assert!(
+            !matches_query(&future, "+READY"),
+            "future scheduled task should not be ready"
+        );
     }
 
     #[test]
     fn project_prefix_matching() {
         let task = task_with(&[("project", "area.personal.sub"), ("status", "pending")]);
 
-        assert!(matches_query(&task, "project:area.personal"), "project prefix should match");
-        assert!(matches_query(&task, "project:area.personal.sub"), "exact project should match");
-        assert!(!matches_query(&task, "project:other"), "non-matching project should not match");
-    }
-
-    #[test]
-    fn tag_include_exclude() {
-        let task = task_with(&[("tag", "home"), ("tag", "work"), ("status", "pending")]);
-
-        assert!(matches_query(&task, "+home"), "include tag should match");
-        assert!(matches_query(&task, "+work"), "include tag should match");
-        assert!(!matches_query(&task, "+urgent"), "missing tag should not match");
-        assert!(!matches_query(&task, "+home -work"), "exclude tag should remove match");
-    }
-
-    #[test]
-    fn or_grouping_matches_either() {
-        let task_a = task_with(&[("tag", "work"), ("status", "pending")]);
-        let task_b = task_with(&[("project", "personal"), ("status", "pending")]);
-
-        assert!(matches_query(&task_a, "(+work or project:personal)"), "OR group should match first alternative");
-        assert!(matches_query(&task_b, "(+work or project:personal)"), "OR group should match second alternative");
-        assert!(!matches_query(&task_b, "(+home and +urgent)"), "AND group should require both");
-    }
-
-    #[test]
-    fn negation_inverts_match() {
-        let task = task_with(&[("tag", "home"), ("status", "pending")]);
-
-        assert!(!matches_query(&task, "-home"), "negation should invert tag match");
-        assert!(matches_query(&task, "-work"), "negation of absent tag should pass");
-    }
-
-    #[test]
-    fn status_term_matches_task_status() {
-        let done = task_with(&[("status", "completed")]);
-        let pending = task_with(&[("status", "pending")]);
-
-        assert!(matches_query(&done, "status:completed"), "completed task matches completed query");
-        assert!(matches_query(&done, "+COMPLETED"), "completed task matches +COMPLETED syntax");
-        assert!(!matches_query(&pending, "status:completed"), "pending task should not match completed query");
+        assert!(
+            matches_query(&task, "project:area.personal"),
+            "project prefix should match"
+        );
+        assert!(
+            matches_query(&task, "project:area.personal.sub"),
+            "exact project should match"
+        );
+        assert!(
+            !matches_query(&task, "project:other"),
+            "non-matching project should not match"
+        );
     }
 
     #[test]
     fn invalid_query_falls_back_to_text_search() {
         let task = task_with(&[("description", "due:not-a-date"), ("status", "pending")]);
 
-        assert!(matches_query(&task, "due:not-a-date"), "invalid date expression should fall back to text search");
+        assert!(
+            matches_query(&task, "due:not-a-date"),
+            "invalid date expression should fall back to text search"
+        );
     }
 
     #[test]
-    fn relative_date_expression_matches() {
+    fn bare_iso_date_parses_as_date_term() {
+        let expr = parse_expr("due:2026-06-20").expect("bare ISO date should parse");
+        match expr {
+            Expr::Term(Term::Date {
+                field: DateField::Due,
+                op: DateOp::On,
+                value: Some(_),
+            }) => {}
+            other => panic!("expected Date term for due:2026-06-20, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bare_iso_date_does_not_match_different_day() {
         let now = taskchampion::chrono::Utc::now();
-        let due_today = task_with(&[("due", &format!("{}", now.format("%+"))), ("status", "pending")]);
+        let yesterday = (now - chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string();
+        let due_today = task_with(&[
+            ("due", &format!("{}", now.format("%+"))),
+            ("status", "pending"),
+        ]);
 
-        assert!(matches_query(&due_today, "due:today"), "due today should match due:today");
+        assert!(
+            !matches_query(&due_today, &format!("due:{yesterday}")),
+            "bare ISO date should not match task due on different day"
+        );
     }
 
     #[test]
-    fn plain_text_search() {
-        let task = task_with(&[("description", "buy groceries"), ("status", "pending")]);
+    fn date_field_modifier_before_parses() {
+        let expr = parse_expr("due.before:tomorrow").expect("due.before should parse");
+        match expr {
+            Expr::Term(Term::Date {
+                field: DateField::Due,
+                op: DateOp::Before,
+                value: Some(_),
+            }) => {}
+            other => panic!("expected Date Before term, got {other:?}"),
+        }
+    }
 
-        assert!(matches_query(&task, "groceries"), "text search should match description");
-        assert!(!matches_query(&task, "electronics"), "missing text should not match");
+    #[test]
+    fn date_field_modifier_after_parses() {
+        let expr = parse_expr("due.after:yesterday").expect("due.after should parse");
+        match expr {
+            Expr::Term(Term::Date {
+                field: DateField::Due,
+                op: DateOp::After,
+                value: Some(_),
+            }) => {}
+            other => panic!("expected Date After term, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn date_field_modifier_beforeeq_parses() {
+        let expr = parse_expr("due.beforeeq:tomorrow").expect("due.beforeeq should parse");
+        match expr {
+            Expr::Term(Term::Date {
+                field: DateField::Due,
+                op: DateOp::BeforeEq,
+                value: Some(_),
+            }) => {}
+            other => panic!("expected Date BeforeEq term, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn date_field_modifier_aftereq_parses() {
+        let expr = parse_expr("due.aftereq:yesterday").expect("due.aftereq should parse");
+        match expr {
+            Expr::Term(Term::Date {
+                field: DateField::Due,
+                op: DateOp::AfterEq,
+                value: Some(_),
+            }) => {}
+            other => panic!("expected Date AfterEq term, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn date_none_without_colon_matches_tasks_without_due() {
+        let task_no_due = task_with(&[("status", "pending")]);
+        let now = taskchampion::chrono::Utc::now();
+        let task_with_due = task_with(&[
+            ("due", &format!("{}", now.format("%+"))),
+            ("status", "pending"),
+        ]);
+
+        assert!(
+            matches_query(&task_no_due, "due.none"),
+            "task without due should match due.none"
+        );
+        assert!(
+            !matches_query(&task_with_due, "due.none"),
+            "task with due should NOT match due.none"
+        );
+    }
+
+    #[test]
+    fn date_any_without_colon_matches_tasks_with_due() {
+        let task_no_due = task_with(&[("status", "pending")]);
+        let now = taskchampion::chrono::Utc::now();
+        let task_with_due = task_with(&[
+            ("due", &format!("{}", now.format("%+"))),
+            ("status", "pending"),
+        ]);
+
+        assert!(
+            !matches_query(&task_no_due, "due.any"),
+            "task without due should NOT match due.any"
+        );
+        assert!(
+            matches_query(&task_with_due, "due.any"),
+            "task with due should match due.any"
+        );
+    }
+
+    #[test]
+    fn date_none_with_colon_matches_tasks_without_due() {
+        let task_no_due = task_with(&[("status", "pending")]);
+        let now = taskchampion::chrono::Utc::now();
+        let task_with_due = task_with(&[
+            ("due", &format!("{}", now.format("%+"))),
+            ("status", "pending"),
+        ]);
+
+        assert!(
+            matches_query(&task_no_due, "due:none"),
+            "task without due should match due:none"
+        );
+        assert!(
+            !matches_query(&task_with_due, "due:none"),
+            "task with due should NOT match due:none"
+        );
+    }
+
+    #[test]
+    fn date_any_with_colon_matches_tasks_with_due() {
+        let task_no_due = task_with(&[("status", "pending")]);
+        let now = taskchampion::chrono::Utc::now();
+        let task_with_due = task_with(&[
+            ("due", &format!("{}", now.format("%+"))),
+            ("status", "pending"),
+        ]);
+
+        assert!(
+            !matches_query(&task_no_due, "due:any"),
+            "task without due should NOT match due:any"
+        );
+        assert!(
+            matches_query(&task_with_due, "due:any"),
+            "task with due should match due:any"
+        );
+    }
+
+    #[test]
+    fn tags_any_matches_tasks_with_tags() {
+        let task_no_tags = task_with(&[("status", "pending")]);
+        let task_with_tags = task_with(&[("tag", "home"), ("status", "pending")]);
+
+        assert!(
+            !matches_query(&task_no_tags, "tags:any"),
+            "task without tags should NOT match tags:any"
+        );
+        assert!(
+            matches_query(&task_with_tags, "tags:any"),
+            "task with tags should match tags:any"
+        );
+    }
+
+    #[test]
+    fn invalid_date_terms_still_fall_back_to_text() {
+        match parse_term("due:not-a-date") {
+            Term::Text(value) => assert_eq!(value, "due:not-a-date"),
+            other => panic!("expected invalid date term to fall back to text, got {other:?}"),
+        }
+
+        match parse_term("due<=not-a-date") {
+            Term::Text(value) => assert_eq!(value, "due<=not-a-date"),
+            other => panic!("expected invalid comparison to fall back to text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn not_equals_operator() {
+        let task = task_with(&[("project", "Work"), ("status", "pending")]);
+
+        assert!(
+            matches_query(&task, "project!=Other"),
+            "not-equals should match different"
+        );
+        assert!(
+            !matches_query(&task, "project!=Work"),
+            "not-equals should not match same"
+        );
+    }
+
+    #[test]
+    fn strict_not_equals_operator() {
+        let task = task_with(&[("project", "Work"), ("status", "pending")]);
+
+        assert!(
+            matches_query(&task, "project!==other"),
+            "strict not-equals should match different"
+        );
+        assert!(
+            !matches_query(&task, "project!==Work"),
+            "strict not-equals should not match same"
+        );
+    }
+
+    #[test]
+    fn due_by_modifier() {
+        let now = taskchampion::chrono::Utc::now();
+        let due_today = task_with(&[
+            ("due", &format!("{}", now.format("%+"))),
+            ("status", "pending"),
+        ]);
+
+        assert!(
+            matches_query(&due_today, "due.by:tomorrow"),
+            "due today should match due.by:tomorrow"
+        );
+        assert!(
+            !matches_query(&due_today, "due.by:yesterday"),
+            "due today should NOT match due.by:yesterday"
+        );
+    }
+
+    #[test]
+    fn due_under_below_aliases() {
+        let now = taskchampion::chrono::Utc::now();
+        let due_today = task_with(&[
+            ("due", &format!("{}", now.format("%+"))),
+            ("status", "pending"),
+        ]);
+
+        assert!(
+            matches_query(&due_today, "due.under:tomorrow"),
+            "due.under should work like before"
+        );
+        assert!(
+            matches_query(&due_today, "due.below:tomorrow"),
+            "due.below should work like before"
+        );
+    }
+
+    #[test]
+    fn due_over_above_aliases() {
+        let now = taskchampion::chrono::Utc::now();
+        let due_today = task_with(&[
+            ("due", &format!("{}", now.format("%+"))),
+            ("status", "pending"),
+        ]);
+
+        assert!(
+            matches_query(&due_today, "due.over:yesterday"),
+            "due.over should work like after"
+        );
+        assert!(
+            matches_query(&due_today, "due.above:yesterday"),
+            "due.above should work like after"
+        );
+    }
+
+    #[test]
+    fn flag_priority() {
+        let task_pri = task_with(&[("priority", "H"), ("status", "pending")]);
+        let task_no_pri = task_with(&[("status", "pending")]);
+
+        assert!(
+            matches_query(&task_pri, "+PRIORITY"),
+            "task with priority should match +PRIORITY"
+        );
+        assert!(
+            !matches_query(&task_no_pri, "+PRIORITY"),
+            "task without priority should not match +PRIORITY"
+        );
+    }
+
+    #[test]
+    fn flag_tagged() {
+        let task_no_tags = task_with(&[("status", "pending")]);
+        let task_with_tags = task_with(&[("tag", "home"), ("status", "pending")]);
+
+        assert!(
+            matches_query(&task_with_tags, "+TAGGED"),
+            "tagged task should match +TAGGED"
+        );
+        assert!(
+            !matches_query(&task_no_tags, "+TAGGED"),
+            "untagged task should not match +TAGGED"
+        );
+    }
+
+    #[test]
+    fn flag_annotated() {
+        use taskchampion::Annotation;
+        let mut replica = taskchampion::Replica::new(
+            taskchampion::StorageConfig::InMemory
+                .into_storage()
+                .unwrap(),
+        );
+        let mut ops = taskchampion::Operations::new();
+        let uuid = taskchampion::Uuid::new_v4();
+        let mut task = replica.create_task(uuid, &mut ops).unwrap();
+        task.set_description("test".into(), &mut ops).unwrap();
+        task.set_status(TcStatus::Pending, &mut ops).unwrap();
+        task.add_annotation(
+            Annotation {
+                entry: Utc::now(),
+                description: "note".into(),
+            },
+            &mut ops,
+        )
+        .unwrap();
+        replica.commit_operations(ops).unwrap();
+        let task = replica.get_task(uuid).unwrap().unwrap();
+
+        assert!(
+            matches_query(&task, "+ANNOTATED"),
+            "annotated task should match +ANNOTATED"
+        );
+    }
+
+    #[test]
+    fn flag_unblocked() {
+        let task = task_with(&[("status", "pending")]);
+        assert!(
+            matches_query(&task, "+UNBLOCKED"),
+            "non-blocked task should match +UNBLOCKED"
+        );
+    }
+
+    #[test]
+    fn extended_duration_units() {
+        let now = taskchampion::chrono::Utc::now();
+        let due_in_2h = task_with(&[
+            (
+                "due",
+                &format!("{}", (now + chrono::Duration::hours(2)).format("%+")),
+            ),
+            ("status", "pending"),
+        ]);
+
+        assert!(
+            matches_query(&due_in_2h, "due.before:3h"),
+            "3h should be recognized as 3 hours"
+        );
+        assert!(
+            !matches_query(&due_in_2h, "due.before:1h"),
+            "1h should be recognized as 1 hour"
+        );
+    }
+
+    #[test]
+    fn flag_tomorrow() {
+        let now = taskchampion::chrono::Utc::now();
+        let tomorrow = now + chrono::Duration::days(1);
+        let due_tomorrow = task_with(&[
+            ("due", &format!("{}", tomorrow.format("%+"))),
+            ("status", "pending"),
+        ]);
+        let due_today = task_with(&[
+            ("due", &format!("{}", now.format("%+"))),
+            ("status", "pending"),
+        ]);
+
+        assert!(
+            matches_query(&due_tomorrow, "+TOMORROW"),
+            "task due tomorrow should match +TOMORROW"
+        );
+        assert!(
+            !matches_query(&due_today, "+TOMORROW"),
+            "task due today should not match +TOMORROW"
+        );
+    }
+
+    #[test]
+    fn flag_yesterday() {
+        let now = taskchampion::chrono::Utc::now();
+        let yesterday = now - chrono::Duration::days(1);
+        let due_yesterday = task_with(&[
+            ("due", &format!("{}", yesterday.format("%+"))),
+            ("status", "pending"),
+        ]);
+        let due_today = task_with(&[
+            ("due", &format!("{}", now.format("%+"))),
+            ("status", "pending"),
+        ]);
+
+        assert!(
+            matches_query(&due_yesterday, "+YESTERDAY"),
+            "task due yesterday should match +YESTERDAY"
+        );
+        assert!(
+            !matches_query(&due_today, "+YESTERDAY"),
+            "task due today should not match +YESTERDAY"
+        );
     }
 }

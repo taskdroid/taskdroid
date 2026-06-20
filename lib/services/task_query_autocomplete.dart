@@ -91,7 +91,11 @@ class TaskQueryAutocomplete {
     if (dotIndex > 0) {
       final field = token.text.substring(0, dotIndex);
       final opPrefix = token.text.substring(dotIndex + 1).toLowerCase();
-      if (TaskQuerySyntax.dateFieldNames.contains(field.toLowerCase())) {
+      final isDateField = TaskQuerySyntax.dateFieldNames.contains(
+        field.toLowerCase(),
+      );
+
+      if (isDateField) {
         _addPrefixed(
           suggestions,
           TaskQuerySyntax.dateOperatorNames.map((op) => '$field.$op:'),
@@ -99,8 +103,17 @@ class TaskQueryAutocomplete {
           detail: 'Date operator',
           type: TaskQuerySuggestionType.date,
         );
-        return _rankAndLimit(suggestions, token.text, limit);
       }
+
+      _addPrefixed(
+        suggestions,
+        TaskQuerySyntax.attributeModifierNames.map((mod) => '$field.$mod:'),
+        prefix: '$field.$opPrefix',
+        detail: 'Attribute modifier',
+        type: TaskQuerySuggestionType.operator,
+      );
+
+      return _rankAndLimit(suggestions, token.text, limit);
     }
 
     _addPrefixed(
@@ -186,7 +199,10 @@ class TaskQueryAutocomplete {
     final suggestions = <TaskQuerySuggestion>[];
     final prefix = '$rawKey:$valuePrefix';
 
-    switch (key) {
+    // Strip attribute modifier suffix (e.g. "project.has" -> "project")
+    final baseKey = _stripAttributeModifier(key);
+
+    switch (baseKey) {
       case 'project':
         final normalizedPrefix = valuePrefix.trim().toLowerCase();
         final includeNone =
@@ -261,6 +277,16 @@ class TaskQueryAutocomplete {
     }
 
     return _rankAndLimit(suggestions, prefix, limit);
+  }
+
+  static String _stripAttributeModifier(String key) {
+    final dotIndex = key.lastIndexOf('.');
+    if (dotIndex < 0) return key;
+    final modifier = key.substring(dotIndex + 1);
+    if (TaskQuerySyntax.attributeModifierNames.contains(modifier)) {
+      return key.substring(0, dotIndex);
+    }
+    return key;
   }
 
   static void _addPrefixed(
