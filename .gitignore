@@ -1,4 +1,5 @@
 # Miscellaneous
+docs/
 *.apk
 *.apk.idsig
 *.class

@@ -2,11 +2,13 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:taskdroid/models/filter_tab.dart';
+import 'package:taskdroid/models/task_context.dart';
 import 'package:taskdroid/providers/app_state.dart';
 import 'package:taskdroid/providers/profile_state.dart';
 import 'package:taskdroid/providers/task_state.dart';
 import 'package:taskdroid/services/task_query_autocomplete.dart';
 import 'package:taskdroid/services/task_query_language.dart';
+import 'package:taskdroid/services/write_query_parser.dart';
 import 'package:taskdroid/src/rust/api.dart';
 import 'package:taskdroid/views/onboarding.dart';
 import 'package:taskdroid/widgets/app_drawer.dart';
@@ -265,20 +267,55 @@ class _HomePageState extends State<HomePage>
   }
 
   PreferredSizeWidget _buildTopBar(BuildContext context, TaskState taskState) {
+    final theme = Theme.of(context);
     final profileState = context.watch<ProfileState>();
     final currentProfile = profileState.currentProfile;
     final initials = (currentProfile?.name.isNotEmpty ?? false)
         ? currentProfile!.name[0].toUpperCase()
         : 'T';
+    final activeCtx = taskState.activeContext;
 
     return AppBar(
-      title: const Text('Tasks', style: TextStyle(fontWeight: FontWeight.w600)),
+      title: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: () => _ContextChip.showContextSheet(context, taskState),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(
+                child: Text(
+                  activeCtx != null ? activeCtx.name : 'Tasks',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              Icon(Icons.arrow_drop_down, size: 20),
+            ],
+          ),
+        ),
+      ),
       leading: Builder(
         builder: (context) {
-          return IconButton(
-            icon: const Icon(Icons.menu),
-            tooltip: 'Menu',
-            onPressed: () => Scaffold.of(context).openDrawer(),
+          return Padding(
+            padding: const EdgeInsets.all(8),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(50),
+              onTap: () => Scaffold.of(context).openDrawer(),
+              child: CircleAvatar(
+                radius: 16,
+                backgroundColor: theme.colorScheme.primaryContainer,
+                foregroundColor: theme.colorScheme.onPrimaryContainer,
+                child: Text(
+                  initials,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+            ),
           );
         },
       ),
@@ -306,22 +343,6 @@ class _HomePageState extends State<HomePage>
             ),
             tooltip: taskState.isSyncing ? 'Syncing...' : 'Sync',
           ),
-        Padding(
-          padding: const EdgeInsets.all(8.0),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(50),
-            onTap: () => _showProfileSwitcher(context),
-            child: CircleAvatar(
-              backgroundColor: Theme.of(context).colorScheme.primaryContainer,
-              foregroundColor: Theme.of(context).colorScheme.onPrimaryContainer,
-              child: Text(
-                initials,
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
       ],
     );
   }
@@ -448,7 +469,22 @@ class _HomePageState extends State<HomePage>
     final taskState = context.read<TaskState>();
     if (taskState.currentProfileId == null) return;
 
-    final result = await showTaskEditorSheet(context);
+    final ctx = taskState.activeContext;
+    final wq = ctx != null && ctx.writeQuery.isNotEmpty
+        ? parseWriteQuery(ctx.writeQuery)
+        : null;
+    final initialValues = wq != null
+        ? TaskEditorInitialValues(
+            project: wq.project,
+            priority: wq.priority,
+            tags: wq.tags.toList(),
+          )
+        : null;
+
+    final result = await showTaskEditorSheet(
+      context,
+      initialValues: initialValues,
+    );
     if (!context.mounted || result == null) return;
 
     final udaMap = {for (final uda in result.udas) uda.key: uda.value};
@@ -928,6 +964,7 @@ enum _FilterSelectionState { none, include, exclude }
 
 class TaskSearchAndFiltersRow extends StatefulWidget {
   const TaskSearchAndFiltersRow({
+    super.key,
     required this.searchQuery,
     required this.parsedQuery,
     required this.onSearchChanged,
@@ -1588,6 +1625,454 @@ class _QueueViewAndSearchToggleRow extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+class _ContextChip {
+
+  static void showContextSheet(BuildContext context, TaskState taskState) {
+    final theme = Theme.of(context);
+
+    showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            final contexts = taskState.contexts;
+            final activeId = taskState.activeContext?.id;
+
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Context',
+                            style: theme.textTheme.titleLarge?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.add),
+                          tooltip: 'Define context',
+                          onPressed: () async {
+                            if (await showDefineDialog(context, taskState)) {
+                              setModalState(() {});
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    const Divider(),
+                    if (contexts.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 24),
+                        child: Center(
+                          child: Column(
+                            children: [
+                              Icon(
+                                Icons.filter_alt_outlined,
+                                size: 48,
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'No contexts defined',
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              TextButton.icon(
+                                onPressed: () async {
+                                  if (await showDefineDialog(context, taskState)) {
+                                    setModalState(() {});
+                                  }
+                                },
+                                icon: const Icon(Icons.add),
+                                label: const Text('Define one'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                    else
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Flexible(
+                            child: SingleChildScrollView(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: contexts
+                                    .map(
+                                      (ctx) => _ContextListTile(
+                                        taskContext: ctx,
+                                        isActive: ctx.id == activeId,
+                                        theme: theme,
+                                        taskState: taskState,
+                                        setModalState: setModalState,
+                                      ),
+                                    )
+                                    .toList(),
+                              ),
+                            ),
+                          ),
+                          const Divider(),
+                          ListTile(
+                            leading: Icon(
+                              activeId == null
+                                  ? Icons.radio_button_checked
+                                  : Icons.radio_button_unchecked,
+                              color: activeId == null
+                                  ? theme.colorScheme.primary
+                                  : theme.colorScheme.onSurfaceVariant,
+                            ),
+                            title: Text(
+                              'None (clear context)',
+                              style: TextStyle(
+                                fontWeight: activeId == null
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
+                                color: activeId == null
+                                    ? theme.colorScheme.primary
+                                    : null,
+                              ),
+                            ),
+                            onTap: () {
+                              taskState.clearActiveContext();
+                              Navigator.pop(context);
+                            },
+                          ),
+                        ],
+                      ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  static Future<bool> showDefineDialog(BuildContext context, TaskState taskState) async {
+    final nameController = TextEditingController();
+    final queryController = TextEditingController();
+    final writeController = TextEditingController();
+
+    queryController.text = taskState.searchQuery;
+
+    var didDefine = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text(
+            'Define Context',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameController,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  hintText: 'e.g. work, home, study...',
+                  prefixIcon: Icon(Icons.label_outline),
+                ),
+                textCapitalization: TextCapitalization.words,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: queryController,
+                decoration: const InputDecoration(
+                  hintText: 'Read filter, e.g. +work or +freelance',
+                  prefixIcon: Icon(Icons.filter_alt_outlined),
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: writeController,
+                decoration: const InputDecoration(
+                  hintText: 'Write default, e.g. +work project:Work',
+                  prefixIcon: Icon(Icons.edit_outlined),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final name = nameController.text.trim();
+                final query = queryController.text.trim();
+                final write = writeController.text.trim();
+                if (name.isEmpty) return;
+                taskState.defineContext(name, query, writeQuery: write);
+                didDefine = true;
+                Navigator.pop(ctx);
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+    nameController.dispose();
+    queryController.dispose();
+    writeController.dispose();
+    return didDefine;
+  }
+}
+
+class _ContextListTile extends StatelessWidget {
+  const _ContextListTile({
+    required this.taskContext,
+    required this.isActive,
+    required this.theme,
+    required this.taskState,
+    required this.setModalState,
+  });
+
+  final TaskContext taskContext;
+  final bool isActive;
+  final ThemeData theme;
+  final TaskState taskState;
+  final void Function(void Function()) setModalState;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: Icon(
+        isActive ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+        color: isActive
+            ? theme.colorScheme.primary
+            : theme.colorScheme.onSurfaceVariant,
+      ),
+      title: Text(
+        taskContext.name,
+        style: TextStyle(
+          fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+          color: isActive ? theme.colorScheme.primary : null,
+        ),
+      ),
+      subtitle:
+          taskContext.searchQuery.isNotEmpty ||
+              taskContext.writeQuery.isNotEmpty
+          ? Text(
+              '${taskContext.searchQuery.isNotEmpty ? 'read: ${taskContext.searchQuery}' : ''}${taskContext.searchQuery.isNotEmpty && taskContext.writeQuery.isNotEmpty ? '\n' : ''}${taskContext.writeQuery.isNotEmpty ? 'write: ${taskContext.writeQuery}' : ''}',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            )
+          : null,
+      trailing: isActive
+          ? TextButton(
+              onPressed: () {
+                taskState.clearActiveContext();
+                Navigator.pop(context);
+              },
+              child: const Text('Clear'),
+            )
+          : null,
+      onTap: () {
+        taskState.setActiveContext(taskContext.id);
+        Navigator.pop(context);
+      },
+      onLongPress: () {
+        _showContextOptions(context);
+      },
+    );
+  }
+
+  void _showContextOptions(BuildContext parentContext) {
+    final ts = taskState;
+
+    showModalBottomSheet<void>(
+      context: parentContext,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 12),
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.onSurfaceVariant.withValues(
+                    alpha: 0.4,
+                  ),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        taskContext.name,
+                        style: theme.textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 24),
+                leading: Icon(
+                  Icons.edit_outlined,
+                  color: theme.colorScheme.primary,
+                ),
+                title: const Text(
+                  'Edit',
+                  style: TextStyle(fontWeight: FontWeight.w500),
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showEditDialog(parentContext);
+                },
+              ),
+              ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 24),
+                leading: Icon(
+                  Icons.delete_outline,
+                  color: theme.colorScheme.error,
+                ),
+                title: Text(
+                  'Delete',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w500,
+                    color: theme.colorScheme.error,
+                  ),
+                ),
+                onTap: () async {
+                  Navigator.pop(context);
+                  await ts.deleteContext(taskContext.id);
+                  if (parentContext.mounted) {
+                    Navigator.of(parentContext).pop();
+                  }
+                },
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showEditDialog(BuildContext parentContext) async {
+    final nameController = TextEditingController(text: taskContext.name);
+    final queryController = TextEditingController(
+      text: taskContext.searchQuery,
+    );
+    final writeController = TextEditingController(text: taskContext.writeQuery);
+
+    nameController.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: nameController.text.length,
+    );
+
+    final result = await showDialog<Map<String, String>>(
+      context: parentContext,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text(
+            'Edit context',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameController,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  hintText: 'Context name',
+                  prefixIcon: Icon(Icons.label_outline),
+                ),
+                textCapitalization: TextCapitalization.words,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: queryController,
+                decoration: const InputDecoration(
+                  hintText: 'Read filter, e.g. +work or +freelance',
+                  prefixIcon: Icon(Icons.filter_alt_outlined),
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: writeController,
+                decoration: const InputDecoration(
+                  hintText: 'Write default, e.g. +work project:Work',
+                  prefixIcon: Icon(Icons.edit_outlined),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final name = nameController.text.trim();
+                final query = queryController.text.trim();
+                final write = writeController.text.trim();
+                if (name.isEmpty) return;
+                Navigator.pop(ctx, {
+                  'name': name,
+                  'query': query,
+                  'write': write,
+                });
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+    nameController.dispose();
+    queryController.dispose();
+    writeController.dispose();
+    if (result != null) {
+      taskState.updateContext(
+        taskContext.id,
+        result['name'] ?? taskContext.name,
+        result['query'] ?? taskContext.searchQuery,
+        writeQuery: result['write'] ?? taskContext.writeQuery,
+      );
+      setModalState(() {});
+    }
   }
 }
 

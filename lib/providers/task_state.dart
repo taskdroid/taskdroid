@@ -4,10 +4,12 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taskdroid/models/filter_tab.dart';
 import 'package:taskdroid/models/profile.dart';
+import 'package:taskdroid/models/task_context.dart';
 import 'package:taskdroid/models/task_virtual_flags.dart';
 import 'package:taskdroid/services/calendar_service.dart';
 import 'package:taskdroid/services/profile_storage.dart';
 import 'package:taskdroid/services/task_query_language.dart';
+import 'package:taskdroid/services/write_query_parser.dart';
 import 'package:taskdroid/src/rust/api.dart';
 import 'package:taskdroid/src/rust/frb_generated.dart';
 import 'package:uuid/uuid.dart';
@@ -37,6 +39,9 @@ class TaskState extends ChangeNotifier {
   List<FilterTab> _filterTabs = [];
   String? _currentTabId;
   String? _currentProfileId;
+
+  List<TaskContext> _contexts = [];
+  String? _activeContextId;
   bool _isCalendarSyncEnabled = false;
   int _recurrenceLimit = 1;
   Timer? _saveTabTimer;
@@ -94,9 +99,31 @@ class TaskState extends ChangeNotifier {
     }
   }
 
+  List<TaskContext> get contexts => _contexts;
+  TaskContext? get activeContext {
+    if (_activeContextId == null) return null;
+    try {
+      return _contexts.firstWhere((c) => c.id == _activeContextId);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  bool get hasActiveContext => activeContext != null;
+
+  String get effectiveSearchQuery {
+    final contextQuery = activeContext?.searchQuery ?? '';
+    final userQuery = _buildFilterQuery();
+    if (contextQuery.isEmpty) return userQuery;
+    if (userQuery.isEmpty) return contextQuery;
+    return '($contextQuery) $userQuery';
+  }
+
   Set<String> get allTags {
     final tags = <String>{};
-    final source = _allAutocompleteTasks.isNotEmpty ? _allAutocompleteTasks : _allTasks;
+    final source = _allAutocompleteTasks.isNotEmpty
+        ? _allAutocompleteTasks
+        : _allTasks;
     for (final task in source) {
       tags.addAll(task.tags);
     }
@@ -105,7 +132,9 @@ class TaskState extends ChangeNotifier {
 
   Set<String> get allProjects {
     final projects = <String>{};
-    final source = _allAutocompleteTasks.isNotEmpty ? _allAutocompleteTasks : _allTasks;
+    final source = _allAutocompleteTasks.isNotEmpty
+        ? _allAutocompleteTasks
+        : _allTasks;
     for (final task in source) {
       if (task.project != null && task.project!.isNotEmpty) {
         projects.add(task.project!);
@@ -117,10 +146,7 @@ class TaskState extends ChangeNotifier {
   Future<void> loadProfile(Profile profile) async {
     if (_taskManager != null && _currentProfileId == profile.id) {
       if (_readyTasks.isEmpty && !_isLoading) {
-        await Future.wait([
-          refreshPendingTasks(),
-          _refreshAutocompleteData(),
-        ]);
+        await Future.wait([refreshPendingTasks(), _refreshAutocompleteData()]);
       }
       return;
     }
@@ -148,13 +174,11 @@ class TaskState extends ChangeNotifier {
       );
 
       await _loadFilterTabs(profile.id);
+      await _loadContexts(profile.id);
 
       // Fix: Reset loading guard BEFORE refreshing tasks, else it instantly aborts
       _isLoading = false;
-      await Future.wait([
-        refreshPendingTasks(),
-        _refreshAutocompleteData(),
-      ]);
+      await Future.wait([refreshPendingTasks(), _refreshAutocompleteData()]);
     } catch (e) {
       debugPrint('Failed to load profile: $e');
       _error = 'Unable to load profile database.';
@@ -174,7 +198,7 @@ class TaskState extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final effectiveQuery = _buildFilterQuery();
+      final effectiveQuery = effectiveSearchQuery;
       final filter = TaskFilter(
         status: null,
         project: null,
@@ -237,7 +261,7 @@ class TaskState extends ChangeNotifier {
   List<TaskView> get filteredTasks {
     final parsedQuery = _getParsedSearchQuery();
     final filterKey =
-        '${_queueView.name}:$_searchQuery:${_sortedStrings(includeTags).join(',')}:${_sortedStrings(excludeTags).join(',')}:${tagMatchMode.name}:${_sortedStrings(includeProjects).join(',')}:${_sortedStrings(excludeProjects).join(',')}:${projectMatchMode.name}:${parsedQuery.usesExplicitStatusScope ? 'explicit-status' : 'queue'}';
+        '${_queueView.name}:${_sortedStrings(includeTags).join(',')}:${_sortedStrings(excludeTags).join(',')}:${tagMatchMode.name}:${_sortedStrings(includeProjects).join(',')}:${_sortedStrings(excludeProjects).join(',')}:${projectMatchMode.name}:${parsedQuery.usesExplicitStatusScope ? 'explicit-status' : 'queue'}';
 
     if (_cachedFilteredTasks != null && _lastFilterKey == filterKey) {
       return _cachedFilteredTasks!;
@@ -329,10 +353,11 @@ class TaskState extends ChangeNotifier {
   }
 
   @visibleForTesting
-  bool matchesTaskFilters(TaskView task) => _matchesTaskFilters(task, DateTime.now().toUtc());
+  bool matchesTaskFilters(TaskView task) =>
+      _matchesTaskFilters(task, DateTime.now().toUtc());
 
   TaskQuery _getParsedSearchQuery() {
-    final query = _searchQuery;
+    final query = effectiveSearchQuery;
     if (_parsedSearchQuery != null && _lastParsedSearchQuery == query) {
       return _parsedSearchQuery!;
     }
@@ -352,9 +377,11 @@ class TaskState extends ChangeNotifier {
     final incTags = includeTags;
     if (incTags.isNotEmpty) {
       if (tagMatchMode == FilterMatchMode.or) {
-        if (!incTags.any((t) => taskTags.contains(t.toLowerCase()))) return false;
+        if (!incTags.any((t) => taskTags.contains(t.toLowerCase())))
+          return false;
       } else {
-        if (!incTags.every((t) => taskTags.contains(t.toLowerCase()))) return false;
+        if (!incTags.every((t) => taskTags.contains(t.toLowerCase())))
+          return false;
       }
     }
     for (final tag in excludeTags) {
@@ -366,9 +393,19 @@ class TaskState extends ChangeNotifier {
       if (project == null || project.isEmpty) return false;
       final lowerProject = project.toLowerCase();
       if (projectMatchMode == FilterMatchMode.or) {
-        if (!incProjs.any((p) => lowerProject == p.toLowerCase() || lowerProject.startsWith('${p.toLowerCase()}.'))) return false;
+        if (!incProjs.any(
+          (p) =>
+              lowerProject == p.toLowerCase() ||
+              lowerProject.startsWith('${p.toLowerCase()}.'),
+        ))
+          return false;
       } else {
-        if (!incProjs.every((p) => lowerProject == p.toLowerCase() || lowerProject.startsWith('${p.toLowerCase()}.'))) return false;
+        if (!incProjs.every(
+          (p) =>
+              lowerProject == p.toLowerCase() ||
+              lowerProject.startsWith('${p.toLowerCase()}.'),
+        ))
+          return false;
       }
     }
     for (final proj in excludeProjects) {
@@ -376,7 +413,8 @@ class TaskState extends ChangeNotifier {
       if (project != null) {
         final lowerProject = project.toLowerCase();
         final lowerProj = proj.toLowerCase();
-        if (lowerProject == lowerProj || lowerProject.startsWith('$lowerProj.')) {
+        if (lowerProject == lowerProj ||
+            lowerProject.startsWith('$lowerProj.')) {
           return false;
         }
       }
@@ -566,7 +604,7 @@ class TaskState extends ChangeNotifier {
       if (task == null) return 'Task not found';
       final seriesUuid = task.isRecurringTemplate ? task.uuid : task.parentUuid;
       if (seriesUuid == null) return 'Task is not part of a recurring series';
-      return updateTask(seriesUuid, params);
+      return await updateTask(seriesUuid, params);
     } catch (e) {
       return e.toString();
     }
@@ -942,6 +980,114 @@ class TaskState extends ChangeNotifier {
     _projectMatchMode = tab.projectMatchMode ?? FilterMatchMode.and;
   }
 
+  Future<void> _loadContexts(String profileId) async {
+    _contexts = [];
+    _activeContextId = null;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonString = prefs.getString('contexts_$profileId');
+      if (jsonString != null && jsonString.isNotEmpty) {
+        final List<dynamic> contextsJson = jsonDecode(jsonString);
+        _contexts = contextsJson.map((j) => TaskContext.fromJson(j)).toList();
+        final activeId = prefs.getString('active_context_id_$profileId');
+        _activeContextId = activeId;
+      }
+    } catch (e) {
+      debugPrint('Context load error: $e');
+    }
+  }
+
+  Future<void> _saveContexts(String profileId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      'contexts_$profileId',
+      jsonEncode(_contexts.map((c) => c.toJson()).toList()),
+    );
+    if (_activeContextId != null) {
+      await prefs.setString('active_context_id_$profileId', _activeContextId!);
+    } else {
+      await prefs.remove('active_context_id_$profileId');
+    }
+  }
+
+  void defineContext(String name, String query, {String writeQuery = ''}) {
+    final context = TaskContext(
+      id: const Uuid().v4(),
+      name: name,
+      searchQuery: query,
+      writeQuery: writeQuery,
+    );
+    _contexts = [..._contexts, context];
+    _cachedFilteredTasks = null;
+    notifyListeners();
+    if (_currentProfileId != null) {
+      unawaited(_saveContexts(_currentProfileId!));
+    }
+  }
+
+  Future<void> deleteContext(String id) async {
+    final wasActive = _activeContextId == id;
+    _contexts = _contexts.where((c) => c.id != id).toList();
+    if (wasActive) {
+      _activeContextId = null;
+      _lastParsedSearchQuery = null;
+      _parsedSearchQuery = null;
+    }
+    _cachedFilteredTasks = null;
+    notifyListeners();
+    if (_currentProfileId != null) {
+      await _saveContexts(_currentProfileId!);
+    }
+    if (wasActive) {
+      unawaited(refreshPendingTasks());
+    }
+  }
+
+  void setActiveContext(String? id) {
+    if (id != null && !_contexts.any((c) => c.id == id)) return;
+    _activeContextId = id;
+    _lastParsedSearchQuery = null;
+    _parsedSearchQuery = null;
+    _cachedFilteredTasks = null;
+    notifyListeners();
+    if (_currentProfileId != null) {
+      unawaited(_saveContexts(_currentProfileId!));
+    }
+    unawaited(refreshPendingTasks());
+  }
+
+  void clearActiveContext() {
+    setActiveContext(null);
+  }
+
+  Future<void> updateContext(
+    String id,
+    String name,
+    String query, {
+    String writeQuery = '',
+  }) async {
+    final idx = _contexts.indexWhere((c) => c.id == id);
+    if (idx != -1) {
+      final newList = List<TaskContext>.from(_contexts);
+      newList[idx] = newList[idx].copyWith(
+        name: name,
+        searchQuery: query,
+        writeQuery: writeQuery,
+      );
+      _contexts = newList;
+      _lastParsedSearchQuery = null;
+      _parsedSearchQuery = null;
+      _cachedFilteredTasks = null;
+      notifyListeners();
+      if (_currentProfileId != null) {
+        await _saveContexts(_currentProfileId!);
+      }
+      if (_activeContextId == id) {
+        unawaited(refreshPendingTasks());
+      }
+    }
+  }
+
   String _migratedSearchQuery(FilterTab tab) {
     final fragments = <String>[];
     final search = tab.searchQuery.trim();
@@ -1018,7 +1164,7 @@ class TaskState extends ChangeNotifier {
   Future<int> getTotalTaskCount() async {
     if (_taskManager == null) return 0;
     try {
-      final effectiveQuery = _buildFilterQuery();
+      final effectiveQuery = effectiveSearchQuery;
       final filter = TaskFilter(
         status: null,
         project: null,
@@ -1048,6 +1194,8 @@ class TaskState extends ChangeNotifier {
     _currentTabId = null;
     _lastParsedSearchQuery = null;
     _parsedSearchQuery = null;
+    _contexts = [];
+    _activeContextId = null;
     notifyListeners();
   }
 
@@ -1132,7 +1280,9 @@ Future<_SyncResult> _syncInIsolate(_SyncParams params) async {
     await RustLib.init();
     final manager = TaskManager();
     await manager.loadProfile(directoryPath: params.directoryPath);
-    await manager.setRecurrenceLimit(limit: BigInt.from(params.recurrenceLimit));
+    await manager.setRecurrenceLimit(
+      limit: BigInt.from(params.recurrenceLimit),
+    );
     await manager.sync_(
       url: params.url,
       clientId: params.clientId,
