@@ -486,7 +486,11 @@ class TaskState extends ChangeNotifier {
 
       if (_isCalendarSyncEnabled) {
         final newTask = await _taskManager!.getTask(uuidStr: uuid);
-        await _calendarService.syncTask(newTask);
+        try {
+          await _calendarService.syncTask(newTask);
+        } catch (e) {
+          return 'Calendar sync failed.';
+        }
       }
       return null;
     } catch (e) {
@@ -498,7 +502,13 @@ class TaskState extends ChangeNotifier {
     if (_taskManager == null) return 'No profile loaded';
     try {
       await _taskManager!.doneTasks(uuidStrs: [uuid]);
-      if (_isCalendarSyncEnabled) await _calendarService.deleteTask(uuid);
+      if (_isCalendarSyncEnabled) {
+        try {
+          await _calendarService.deleteTask(uuid);
+        } catch (e) {
+          return 'Calendar sync failed.';
+        }
+      }
       await refreshPendingTasks();
       await _refreshAutocompleteData();
       return null;
@@ -511,7 +521,13 @@ class TaskState extends ChangeNotifier {
     if (_taskManager == null) return 'No profile loaded';
     try {
       await _taskManager!.deleteTasks(uuidStrs: [uuid]);
-      if (_isCalendarSyncEnabled) await _calendarService.deleteTask(uuid);
+      if (_isCalendarSyncEnabled) {
+        try {
+          await _calendarService.deleteTask(uuid);
+        } catch (e) {
+          return 'Calendar sync failed.';
+        }
+      }
       await refreshPendingTasks();
       await _refreshAutocompleteData();
       return null;
@@ -524,7 +540,13 @@ class TaskState extends ChangeNotifier {
     if (_taskManager == null) return 'No profile loaded';
     try {
       await _taskManager!.deleteTaskSingle(uuidStr: uuid);
-      if (_isCalendarSyncEnabled) await _calendarService.deleteTask(uuid);
+      if (_isCalendarSyncEnabled) {
+        try {
+          await _calendarService.deleteTask(uuid);
+        } catch (e) {
+          return 'Calendar sync failed.';
+        }
+      }
       await refreshPendingTasks();
       await _refreshAutocompleteData();
       return null;
@@ -537,7 +559,13 @@ class TaskState extends ChangeNotifier {
     if (_taskManager == null) return 'No profile loaded';
     try {
       await _taskManager!.deleteTaskSeries(uuidStr: uuid);
-      if (_isCalendarSyncEnabled) await _calendarService.deleteTask(uuid);
+      if (_isCalendarSyncEnabled) {
+        try {
+          await _calendarService.deleteTask(uuid);
+        } catch (e) {
+          return 'Calendar sync failed.';
+        }
+      }
       await refreshPendingTasks();
       await _refreshAutocompleteData();
       return null;
@@ -550,7 +578,13 @@ class TaskState extends ChangeNotifier {
     if (_taskManager == null) return 'No profile loaded';
     try {
       await _taskManager!.doneTaskSingle(uuidStr: uuid);
-      if (_isCalendarSyncEnabled) await _calendarService.deleteTask(uuid);
+      if (_isCalendarSyncEnabled) {
+        try {
+          await _calendarService.deleteTask(uuid);
+        } catch (e) {
+          return 'Calendar sync failed.';
+        }
+      }
       await refreshPendingTasks();
       await _refreshAutocompleteData();
       return null;
@@ -589,7 +623,11 @@ class TaskState extends ChangeNotifier {
 
       if (_isCalendarSyncEnabled) {
         final updated = await _taskManager!.getTask(uuidStr: uuid);
-        await _calendarService.syncTask(updated);
+        try {
+          await _calendarService.syncTask(updated);
+        } catch (e) {
+          return 'Calendar sync failed.';
+        }
       }
       return null;
     } catch (e) {
@@ -663,8 +701,16 @@ class TaskState extends ChangeNotifier {
     try {
       await _taskManager!.doneTasks(uuidStrs: ids);
       if (_isCalendarSyncEnabled) {
-        for (var id in ids) {
-          _calendarService.deleteTask(id);
+        final calendarErrors = <String>[];
+        for (final id in ids) {
+          try {
+            await _calendarService.deleteTask(id);
+          } catch (e) {
+            calendarErrors.add(id);
+          }
+        }
+        if (calendarErrors.isNotEmpty) {
+          return 'Calendar sync failed for ${calendarErrors.length} task(s).';
         }
       }
       clearSelection();
@@ -686,8 +732,16 @@ class TaskState extends ChangeNotifier {
     try {
       await _taskManager!.deleteTasks(uuidStrs: ids);
       if (_isCalendarSyncEnabled) {
-        for (var id in ids) {
-          _calendarService.deleteTask(id);
+        final calendarErrors = <String>[];
+        for (final id in ids) {
+          try {
+            await _calendarService.deleteTask(id);
+          } catch (e) {
+            calendarErrors.add(id);
+          }
+        }
+        if (calendarErrors.isNotEmpty) {
+          return 'Calendar sync failed for ${calendarErrors.length} task(s).';
         }
       }
       clearSelection();
