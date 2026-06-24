@@ -8,10 +8,9 @@ import 'package:taskdroid/models/task_context.dart';
 import 'package:taskdroid/models/task_virtual_flags.dart';
 import 'package:taskdroid/services/calendar_service.dart';
 import 'package:taskdroid/services/profile_storage.dart';
+import 'package:taskdroid/services/sync_isolate_service.dart';
 import 'package:taskdroid/services/task_query_language.dart';
-import 'package:taskdroid/services/write_query_parser.dart';
 import 'package:taskdroid/src/rust/api.dart';
-import 'package:taskdroid/src/rust/frb_generated.dart';
 import 'package:uuid/uuid.dart';
 
 enum TaskQueueView { ready, waiting, scheduled }
@@ -89,6 +88,7 @@ class TaskState extends ChangeNotifier {
       usesExplicitStatusScope ? _allTasks : _sourceTasksForCurrentView();
 
   final CalendarService _calendarService = CalendarService();
+  final SyncIsolateService _syncService = SyncIsolateService();
 
   FilterTab? get currentTab {
     if (_currentTabId == null) return null;
@@ -1257,6 +1257,7 @@ class TaskState extends ChangeNotifier {
   void dispose() {
     _saveTabTimer?.cancel();
     _debounceFilterTimer?.cancel();
+    _syncService.dispose();
     super.dispose();
   }
 
@@ -1265,19 +1266,14 @@ class TaskState extends ChangeNotifier {
     notifyListeners();
     try {
       final dbDir = await resolveProfileStorageDir(profile);
-
-      final result = await compute(
-        _syncInIsolate,
-        _SyncParams(
-          directoryPath: dbDir.path,
-          url: profile.serverUrl,
-          clientId: profile.uuid,
-          encryptionSecret: profile.secret,
-          recurrenceLimit: _recurrenceLimit,
-        ),
+      final error = await _syncService.sync(
+        dbDir.path,
+        profile.serverUrl,
+        profile.uuid,
+        profile.secret,
+        _recurrenceLimit,
       );
-
-      if (!result.success) return result.error;
+      if (error != null) return error;
 
       await refreshPendingTasks();
       await _refreshAutocompleteData();
@@ -1305,45 +1301,5 @@ class TaskState extends ChangeNotifier {
     } catch (e) {
       return e.toString();
     }
-  }
-}
-
-class _SyncParams {
-  final String directoryPath;
-  final String url;
-  final String clientId;
-  final String encryptionSecret;
-  final int recurrenceLimit;
-  _SyncParams({
-    required this.directoryPath,
-    required this.url,
-    required this.clientId,
-    required this.encryptionSecret,
-    required this.recurrenceLimit,
-  });
-}
-
-class _SyncResult {
-  final bool success;
-  final String? error;
-  _SyncResult({required this.success, this.error});
-}
-
-Future<_SyncResult> _syncInIsolate(_SyncParams params) async {
-  try {
-    await RustLib.init();
-    final manager = TaskManager();
-    await manager.loadProfile(directoryPath: params.directoryPath);
-    await manager.setRecurrenceLimit(
-      limit: BigInt.from(params.recurrenceLimit),
-    );
-    await manager.sync_(
-      url: params.url,
-      clientId: params.clientId,
-      encryptionSecret: params.encryptionSecret,
-    );
-    return _SyncResult(success: true);
-  } catch (e) {
-    return _SyncResult(success: false, error: e.toString());
   }
 }

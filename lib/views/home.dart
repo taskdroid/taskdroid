@@ -110,18 +110,26 @@ class _HomePageState extends State<HomePage>
 
     taskState.sync(profile).then((error) {
       if (!context.mounted) return;
+      final theme = Theme.of(context);
       if (error != null) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Auto-sync failed: $error'),
-            backgroundColor: Theme.of(context).colorScheme.error,
+            content: Text(
+              'Auto-sync failed: $error',
+              style: TextStyle(color: theme.colorScheme.onError),
+            ),
+            backgroundColor: theme.colorScheme.error,
           ),
         );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Auto-synced successfully'),
-            duration: Duration(seconds: 2),
+          SnackBar(
+            content: Text(
+              'Auto-synced successfully',
+              style: TextStyle(color: theme.colorScheme.onPrimaryContainer),
+            ),
+            backgroundColor: theme.colorScheme.primaryContainer,
+            duration: const Duration(seconds: 2),
           ),
         );
       }
@@ -328,12 +336,20 @@ class _HomePageState extends State<HomePage>
                     final error = await taskState.sync(currentProfile!);
                     if (!context.mounted) return;
                     final theme = Theme.of(context);
+                    final isError = error != null;
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
-                        content: Text(error ?? 'Sync complete'),
-                        backgroundColor: error == null
-                            ? theme.colorScheme.primaryContainer
-                            : theme.colorScheme.error,
+                        content: Text(
+                          error ?? 'Sync complete',
+                          style: TextStyle(
+                            color: isError
+                                ? theme.colorScheme.onError
+                                : theme.colorScheme.onPrimaryContainer,
+                          ),
+                        ),
+                        backgroundColor: isError
+                            ? theme.colorScheme.error
+                            : theme.colorScheme.primaryContainer,
                       ),
                     );
                   },
@@ -1629,7 +1645,6 @@ class _QueueViewAndSearchToggleRow extends StatelessWidget {
 }
 
 class _ContextChip {
-
   static void showContextSheet(BuildContext context, TaskState taskState) {
     final theme = Theme.of(context);
 
@@ -1695,7 +1710,10 @@ class _ContextChip {
                               const SizedBox(height: 16),
                               TextButton.icon(
                                 onPressed: () async {
-                                  if (await showDefineDialog(context, taskState)) {
+                                  if (await showDefineDialog(
+                                    context,
+                                    taskState,
+                                  )) {
                                     setModalState(() {});
                                   }
                                 },
@@ -1766,7 +1784,10 @@ class _ContextChip {
     );
   }
 
-  static Future<bool> showDefineDialog(BuildContext context, TaskState taskState) async {
+  static Future<bool> showDefineDialog(
+    BuildContext context,
+    TaskState taskState,
+  ) async {
     final nameController = TextEditingController();
     final queryController = TextEditingController();
     final writeController = TextEditingController();
