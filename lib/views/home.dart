@@ -6,6 +6,7 @@ import 'package:taskdroid/models/task_context.dart';
 import 'package:taskdroid/providers/app_state.dart';
 import 'package:taskdroid/providers/profile_state.dart';
 import 'package:taskdroid/providers/task_state.dart';
+import 'package:taskdroid/services/task_queue_service.dart' show TaskQueueView;
 import 'package:taskdroid/services/task_query_autocomplete.dart';
 import 'package:taskdroid/services/task_query_language.dart';
 import 'package:taskdroid/services/write_query_parser.dart';
