@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:taskdroid/providers/app_state.dart';
@@ -182,13 +183,17 @@ class TaskListItem extends StatelessWidget {
 
         if (action == SwipeAction.delete) {
           final error = await taskState.deleteTask(task.uuid);
-          if (!context.mounted) return false;
+          if (!context.mounted) return error == null;
           _showSnack(
             context,
             error ?? 'Task deleted',
             taskState,
             canUndo: error == null,
           );
+          if (error == null) {
+            unawaited(taskState.refreshPendingTasks());
+            unawaited(taskState.refreshAutocompleteData());
+          }
           return error == null;
         }
 
@@ -203,13 +208,17 @@ class TaskListItem extends StatelessWidget {
         }
 
         final error = await taskState.markTaskDone(task.uuid);
-        if (!context.mounted) return false;
+        if (!context.mounted) return error == null;
         _showSnack(
           context,
           error ?? 'Task done',
           taskState,
           canUndo: error == null,
         );
+        if (error == null) {
+          unawaited(taskState.refreshPendingTasks());
+          unawaited(taskState.refreshAutocompleteData());
+        }
         return error == null;
       },
       child: tile,

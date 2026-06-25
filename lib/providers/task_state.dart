@@ -5,10 +5,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taskdroid/models/filter_tab.dart';
 import 'package:taskdroid/models/profile.dart';
 import 'package:taskdroid/models/task_context.dart';
-import 'package:taskdroid/models/task_virtual_flags.dart';
 import 'package:taskdroid/services/calendar_service.dart';
 import 'package:taskdroid/services/profile_storage.dart';
 import 'package:taskdroid/services/sync_isolate_service.dart';
+import 'package:taskdroid/services/task_repository.dart';
 import 'package:taskdroid/services/task_query_language.dart';
 import 'package:taskdroid/src/rust/api.dart';
 import 'package:uuid/uuid.dart';
@@ -16,16 +16,11 @@ import 'package:uuid/uuid.dart';
 enum TaskQueueView { ready, waiting, scheduled }
 
 class TaskState extends ChangeNotifier {
-  TaskManager? _taskManager;
-  List<TaskView> _allTasks = [];
-  List<TaskView> _allAutocompleteTasks = [];
-  List<TaskView> _readyTasks = [];
-  List<TaskView> _waitingTasks = [];
-  List<TaskView> _scheduledTasks = [];
-  final Map<String, TaskView> _taskByUuid = {};
-  bool _isLoading = false;
+  final TaskRepository _repo = TaskRepository();
+  final CalendarService _calendarService = CalendarService();
+  final SyncIsolateService _syncService = SyncIsolateService();
+
   bool _isSyncing = false;
-  String? _error;
 
   String _searchQuery = '';
   Set<String>? _includeTags;
@@ -42,11 +37,9 @@ class TaskState extends ChangeNotifier {
   List<TaskContext> _contexts = [];
   String? _activeContextId;
   bool _isCalendarSyncEnabled = false;
-  int _recurrenceLimit = 1;
   Timer? _saveTabTimer;
   Timer? _debounceFilterTimer;
   TaskQueueView _queueView = TaskQueueView.ready;
-  bool _needsRefreshAfterCurrentLoad = false;
 
   final Set<String> _selectedTaskUuids = {};
 
@@ -55,15 +48,15 @@ class TaskState extends ChangeNotifier {
   String? _lastParsedSearchQuery;
   TaskQuery? _parsedSearchQuery;
 
-  TaskManager? get taskManager => _taskManager;
-  List<TaskView> get pendingTasks => _readyTasks;
-  List<TaskView> get waitingTasks => _waitingTasks;
-  List<TaskView> get scheduledTasks => _scheduledTasks;
+  TaskManager? get taskManager => _repo.taskManager;
+  List<TaskView> get pendingTasks => _repo.readyTasks;
+  List<TaskView> get waitingTasks => _repo.waitingTasks;
+  List<TaskView> get scheduledTasks => _repo.scheduledTasks;
   TaskQueueView get queueView => _queueView;
   List<TaskView> get currentViewTasks => _sourceTasksForCurrentView();
-  bool get isLoading => _isLoading;
+  bool get isLoading => _repo.isLoading;
   bool get isSyncing => _isSyncing;
-  String? get error => _error;
+  String? get error => _repo.error;
   String get searchQuery => _searchQuery;
   TaskQuery get parsedSearchQuery => _getParsedSearchQuery();
   Set<String> get selectedTags => includeTags;
@@ -85,10 +78,7 @@ class TaskState extends ChangeNotifier {
   bool get usesExplicitStatusScope =>
       _getParsedSearchQuery().usesExplicitStatusScope;
   List<TaskView> get displaySourceTasks =>
-      usesExplicitStatusScope ? _allTasks : _sourceTasksForCurrentView();
-
-  final CalendarService _calendarService = CalendarService();
-  final SyncIsolateService _syncService = SyncIsolateService();
+      usesExplicitStatusScope ? _repo.allTasks : _sourceTasksForCurrentView();
 
   FilterTab? get currentTab {
     if (_currentTabId == null) return null;
@@ -119,143 +109,51 @@ class TaskState extends ChangeNotifier {
     return '($contextQuery) $userQuery';
   }
 
-  Set<String> get allTags {
-    final tags = <String>{};
-    final source = _allAutocompleteTasks.isNotEmpty
-        ? _allAutocompleteTasks
-        : _allTasks;
-    for (final task in source) {
-      tags.addAll(task.tags);
-    }
-    return tags;
-  }
+  Set<String> get allTags => _repo.allTags;
 
-  Set<String> get allProjects {
-    final projects = <String>{};
-    final source = _allAutocompleteTasks.isNotEmpty
-        ? _allAutocompleteTasks
-        : _allTasks;
-    for (final task in source) {
-      if (task.project != null && task.project!.isNotEmpty) {
-        projects.add(task.project!);
-      }
-    }
-    return projects;
-  }
+  Set<String> get allProjects => _repo.allProjects;
 
   Future<void> loadProfile(Profile profile) async {
-    if (_taskManager != null && _currentProfileId == profile.id) {
-      if (_readyTasks.isEmpty && !_isLoading) {
-        await Future.wait([refreshPendingTasks(), _refreshAutocompleteData()]);
+    if (_repo.taskManager != null && _currentProfileId == profile.id) {
+      if (_repo.readyTasks.isEmpty && !_repo.isLoading) {
+        await Future.wait(
+            [refreshPendingTasks(), _repo.refreshAutocompleteData()]);
       }
       return;
     }
 
-    if (_isLoading && _currentProfileId == profile.id) {
+    if (_repo.isLoading && _currentProfileId == profile.id) {
       return;
     }
 
-    _isLoading = true;
-    _error = null;
     _currentProfileId = profile.id;
     _isCalendarSyncEnabled = profile.calendarSync;
-    _recurrenceLimit = profile.recurrenceLimit < 0
-        ? 0
-        : profile.recurrenceLimit;
     notifyListeners();
 
     try {
       final dbDir = await resolveProfileStorageDir(profile);
 
-      _taskManager = TaskManager();
-      await _taskManager!.loadProfile(directoryPath: dbDir.path);
-      await _taskManager!.setRecurrenceLimit(
-        limit: BigInt.from(_recurrenceLimit),
+      await _repo.loadProfile(
+        profile.id,
+        dbDir.path,
+        profile.recurrenceLimit,
       );
 
       await _loadFilterTabs(profile.id);
       await _loadContexts(profile.id);
 
-      // Fix: Reset loading guard BEFORE refreshing tasks, else it instantly aborts
-      _isLoading = false;
-      await Future.wait([refreshPendingTasks(), _refreshAutocompleteData()]);
+      await Future.wait(
+          [refreshPendingTasks(), _repo.refreshAutocompleteData()]);
     } catch (e) {
       debugPrint('Failed to load profile: $e');
-      _error = 'Unable to load profile database.';
-      _isLoading = false;
       notifyListeners();
     }
   }
 
   Future<void> refreshPendingTasks() async {
-    if (_taskManager == null) return;
-    if (_isLoading) {
-      _needsRefreshAfterCurrentLoad = true;
-      return;
-    }
-
-    _isLoading = true;
+    await _repo.refreshPendingTasks(effectiveSearchQuery);
+    _cachedFilteredTasks = null;
     notifyListeners();
-
-    try {
-      final effectiveQuery = effectiveSearchQuery;
-      final filter = TaskFilter(
-        status: null,
-        project: null,
-        tags: [],
-        searchTerm: effectiveQuery.isEmpty ? null : effectiveQuery,
-        offset: BigInt.from(0),
-        limit: BigInt.from(5000),
-      );
-
-      final result = await _taskManager!.listTasks(filter: filter);
-      final now = DateTime.now().toUtc();
-      final ready = <TaskView>[];
-      final waiting = <TaskView>[];
-      final scheduled = <TaskView>[];
-      _allTasks = result.tasks;
-      _taskByUuid.clear();
-
-      for (final task in result.tasks) {
-        _taskByUuid[task.uuid] = task;
-        if (task.status == TaskStatus.pending) {
-          if (_isWaitingTask(task, now)) {
-            waiting.add(task);
-          } else if (_isScheduledForFuture(task, now)) {
-            scheduled.add(task);
-          } else {
-            ready.add(task);
-          }
-        }
-      }
-
-      ready.sort((a, b) => b.urgency.compareTo(a.urgency));
-      waiting.sort((a, b) => b.urgency.compareTo(a.urgency));
-      scheduled.sort((a, b) => b.urgency.compareTo(a.urgency));
-
-      _readyTasks = ready;
-      _waitingTasks = waiting;
-      _scheduledTasks = scheduled;
-      _cachedFilteredTasks = null;
-      _error = null;
-    } catch (e) {
-      _error = 'Failed to sync with local database.';
-    } finally {
-      _isLoading = false;
-      notifyListeners();
-      if (_needsRefreshAfterCurrentLoad) {
-        _needsRefreshAfterCurrentLoad = false;
-        unawaited(refreshPendingTasks());
-      }
-    }
-  }
-
-  bool _isWaitingTask(TaskView task, DateTime nowUtc) {
-    return task.isWaitingAt(nowUtc);
-  }
-
-  bool _isScheduledForFuture(TaskView task, DateTime nowUtc) {
-    return task.isScheduledForFuture(nowUtc);
   }
 
   List<TaskView> get filteredTasks {
@@ -278,23 +176,9 @@ class TaskState extends ChangeNotifier {
     return filtered;
   }
 
-  Future<void> _refreshAutocompleteData() async {
-    if (_taskManager == null) return;
-    try {
-      final filter = TaskFilter(
-        status: null,
-        project: null,
-        tags: [],
-        searchTerm: null,
-        offset: BigInt.from(0),
-        limit: BigInt.from(5000),
-      );
-      final result = await _taskManager!.listTasks(filter: filter);
-      _allAutocompleteTasks = result.tasks;
-      notifyListeners();
-    } catch (e) {
-      debugPrint('Failed to refresh autocomplete data: $e');
-    }
+  Future<void> refreshAutocompleteData() async {
+    await _repo.refreshAutocompleteData();
+    notifyListeners();
   }
 
   String _buildFilterQuery() {
@@ -432,249 +316,152 @@ class TaskState extends ChangeNotifier {
   List<TaskView> _sourceTasksForCurrentView() {
     switch (_queueView) {
       case TaskQueueView.ready:
-        return _readyTasks;
+        return _repo.readyTasks;
       case TaskQueueView.waiting:
-        return _waitingTasks;
+        return _repo.waitingTasks;
       case TaskQueueView.scheduled:
-        return _scheduledTasks;
+        return _repo.scheduledTasks;
     }
   }
 
-  TaskView? findTaskByUuid(String uuid) => _taskByUuid[uuid];
+  TaskView? findTaskByUuid(String uuid) => _repo.findTaskByUuid(uuid);
 
-  Future<TaskView?> getTaskByUuid(String uuid) async {
-    final cached = _taskByUuid[uuid];
-    if (cached != null) return cached;
-    final manager = _taskManager;
-    if (manager == null) return null;
-    try {
-      final task = await manager.getTask(uuidStr: uuid);
-      _taskByUuid[task.uuid] = task;
-      return task;
-    } catch (e) {
-      debugPrint('getTaskByUuid: failed to fetch task $uuid: $e');
-      return null;
-    }
-  }
+  Future<TaskView?> getTaskByUuid(String uuid) async =>
+      _repo.getTaskByUuid(uuid);
 
-  List<TaskView> get dependencyCandidates => [
-    ..._readyTasks,
-    ..._waitingTasks,
-    ..._scheduledTasks,
-  ];
+  List<TaskView> get dependencyCandidates => _repo.dependencyCandidates;
 
   Future<String?> createTask(CreateTaskParams params) async {
-    if (_taskManager == null) return 'No profile loaded';
-    try {
-      final uuid = await _taskManager!.addTask(
-        params: CreateTaskParams(
-          description: params.description,
-          status: params.status,
-          project: params.project,
-          priority: params.priority,
-          tags: params.tags,
-          due: params.due,
-          wait: params.wait,
-          scheduled: params.scheduled,
-          recurrence: params.recurrence,
-          until: params.until,
-          udas: params.udas,
-        ),
-      );
-      await refreshPendingTasks();
-      await _refreshAutocompleteData();
+    final result = await _repo.createTask(params);
+    if (result.error != null) return result.error;
 
-      if (_isCalendarSyncEnabled) {
-        final newTask = await _taskManager!.getTask(uuidStr: uuid);
+    await refreshPendingTasks();
+    await refreshAutocompleteData();
+
+    if (_isCalendarSyncEnabled && result.uuid != null) {
+      final newTask = await _repo.getTaskByUuid(result.uuid!);
+      if (newTask != null) {
         try {
           await _calendarService.syncTask(newTask);
         } catch (e) {
           return 'Calendar sync failed.';
         }
       }
-      return null;
-    } catch (e) {
-      return e.toString();
     }
+    return null;
   }
 
   Future<String?> markTaskDone(String uuid) async {
-    if (_taskManager == null) return 'No profile loaded';
-    try {
-      await _taskManager!.doneTasks(uuidStrs: [uuid]);
-      if (_isCalendarSyncEnabled) {
-        try {
-          await _calendarService.deleteTask(uuid);
-        } catch (e) {
-          return 'Calendar sync failed.';
-        }
+    final result = await _repo.markTaskDone(uuid);
+    if (result != null) return result;
+    if (_isCalendarSyncEnabled) {
+      try {
+        await _calendarService.deleteTask(uuid);
+      } catch (e) {
+        return 'Calendar sync failed.';
       }
-      await refreshPendingTasks();
-      await _refreshAutocompleteData();
-      return null;
-    } catch (e) {
-      return e.toString();
     }
+    return null;
   }
 
   Future<String?> deleteTask(String uuid) async {
-    if (_taskManager == null) return 'No profile loaded';
-    try {
-      await _taskManager!.deleteTasks(uuidStrs: [uuid]);
-      if (_isCalendarSyncEnabled) {
-        try {
-          await _calendarService.deleteTask(uuid);
-        } catch (e) {
-          return 'Calendar sync failed.';
-        }
+    final result = await _repo.deleteTask(uuid);
+    if (result != null) return result;
+    if (_isCalendarSyncEnabled) {
+      try {
+        await _calendarService.deleteTask(uuid);
+      } catch (e) {
+        return 'Calendar sync failed.';
       }
-      await refreshPendingTasks();
-      await _refreshAutocompleteData();
-      return null;
-    } catch (e) {
-      return e.toString();
     }
+    return null;
   }
 
   Future<String?> deleteTaskSingle(String uuid) async {
-    if (_taskManager == null) return 'No profile loaded';
-    try {
-      await _taskManager!.deleteTaskSingle(uuidStr: uuid);
-      if (_isCalendarSyncEnabled) {
-        try {
-          await _calendarService.deleteTask(uuid);
-        } catch (e) {
-          return 'Calendar sync failed.';
-        }
+    final result = await _repo.deleteTaskSingle(uuid);
+    if (result != null) return result;
+    if (_isCalendarSyncEnabled) {
+      try {
+        await _calendarService.deleteTask(uuid);
+      } catch (e) {
+        return 'Calendar sync failed.';
       }
-      await refreshPendingTasks();
-      await _refreshAutocompleteData();
-      return null;
-    } catch (e) {
-      return e.toString();
     }
+    await refreshPendingTasks();
+    await refreshAutocompleteData();
+    return null;
   }
 
   Future<String?> deleteTaskSeries(String uuid) async {
-    if (_taskManager == null) return 'No profile loaded';
-    try {
-      await _taskManager!.deleteTaskSeries(uuidStr: uuid);
-      if (_isCalendarSyncEnabled) {
-        try {
-          await _calendarService.deleteTask(uuid);
-        } catch (e) {
-          return 'Calendar sync failed.';
-        }
+    final result = await _repo.deleteTaskSeries(uuid);
+    if (result != null) return result;
+    if (_isCalendarSyncEnabled) {
+      try {
+        await _calendarService.deleteTask(uuid);
+      } catch (e) {
+        return 'Calendar sync failed.';
       }
-      await refreshPendingTasks();
-      await _refreshAutocompleteData();
-      return null;
-    } catch (e) {
-      return e.toString();
     }
+    await refreshPendingTasks();
+    await refreshAutocompleteData();
+    return null;
   }
 
   Future<String?> markTaskDoneSingle(String uuid) async {
-    if (_taskManager == null) return 'No profile loaded';
-    try {
-      await _taskManager!.doneTaskSingle(uuidStr: uuid);
-      if (_isCalendarSyncEnabled) {
-        try {
-          await _calendarService.deleteTask(uuid);
-        } catch (e) {
-          return 'Calendar sync failed.';
-        }
+    final result = await _repo.markTaskDoneSingle(uuid);
+    if (result != null) return result;
+    if (_isCalendarSyncEnabled) {
+      try {
+        await _calendarService.deleteTask(uuid);
+      } catch (e) {
+        return 'Calendar sync failed.';
       }
-      await refreshPendingTasks();
-      await _refreshAutocompleteData();
-      return null;
-    } catch (e) {
-      return e.toString();
     }
+    await refreshPendingTasks();
+    await refreshAutocompleteData();
+    return null;
   }
 
   Future<String?> updateTask(String uuid, UpdateTaskParams params) async {
-    if (_taskManager == null) return 'No profile loaded';
-    try {
-      await _taskManager!.updateTask(
-        uuidStr: uuid,
-        params: UpdateTaskParams(
-          description: params.description,
-          status: params.status,
-          project: params.project,
-          priority: params.priority,
-          due: params.due,
-          wait: params.wait,
-          scheduled: params.scheduled,
-          recurrence: params.recurrence,
-          until: params.until,
-          addTags: params.addTags,
-          removeTags: params.removeTags,
-          addAnnotation: params.addAnnotation,
-          removeAnnotations: params.removeAnnotations,
-          addDepends: params.addDepends,
-          removeDepends: params.removeDepends,
-          start: params.start,
-          setUdas: params.setUdas,
-        ),
-      );
-      await refreshPendingTasks();
-      await _refreshAutocompleteData();
+    final result = await _repo.updateTask(uuid, params);
+    if (result != null) return result;
+    await refreshPendingTasks();
+    await refreshAutocompleteData();
 
-      if (_isCalendarSyncEnabled) {
-        final updated = await _taskManager!.getTask(uuidStr: uuid);
+    if (_isCalendarSyncEnabled) {
+      final updated = await _repo.getTaskByUuid(uuid);
+      if (updated != null) {
         try {
           await _calendarService.syncTask(updated);
         } catch (e) {
           return 'Calendar sync failed.';
         }
       }
-      return null;
-    } catch (e) {
-      return e.toString();
     }
+    return null;
   }
 
   Future<String?> updateTaskSeries(String uuid, UpdateTaskParams params) async {
-    if (_taskManager == null) return 'No profile loaded';
-    try {
-      final task = await getTaskByUuid(uuid);
-      if (task == null) return 'Task not found';
-      final seriesUuid = task.isRecurringTemplate ? task.uuid : task.parentUuid;
-      if (seriesUuid == null) return 'Task is not part of a recurring series';
-      return await updateTask(seriesUuid, params);
-    } catch (e) {
-      return e.toString();
-    }
+    final task = await getTaskByUuid(uuid);
+    if (task == null) return 'Task not found';
+    final seriesUuid = task.isRecurringTemplate ? task.uuid : task.parentUuid;
+    if (seriesUuid == null) return 'Task is not part of a recurring series';
+    return await updateTask(seriesUuid, params);
   }
 
   Future<String?> setRecurrenceLimit(int limit) async {
-    final manager = _taskManager;
-    if (manager == null) return 'No profile loaded';
-    final normalized = limit < 0 ? 0 : limit;
-    try {
-      await manager.setRecurrenceLimit(limit: BigInt.from(normalized));
-      _recurrenceLimit = normalized;
-      await refreshPendingTasks();
-      return null;
-    } catch (e) {
-      return e.toString();
-    }
+    final result = await _repo.setRecurrenceLimit(limit);
+    if (result != null) return result;
+    await refreshPendingTasks();
+    return null;
   }
 
   Future<String?> undo() async {
-    if (_taskManager == null) return 'No profile loaded';
-    try {
-      final success = await _taskManager!.undo();
-      if (success) {
-        await refreshPendingTasks();
-        await _refreshAutocompleteData();
-        return null;
-      }
-      return 'Nothing to undo';
-    } catch (e) {
-      return 'Undo failed';
-    }
+    final result = await _repo.undo();
+    if (result != null) return result;
+    await refreshPendingTasks();
+    await refreshAutocompleteData();
+    return null;
   }
 
   void toggleTaskSelection(String uuid) {
@@ -692,65 +479,59 @@ class TaskState extends ChangeNotifier {
   }
 
   Future<String?> bulkMarkDone() async {
-    if (_taskManager == null) return null;
     final ids = _selectedTaskUuids
-        .where((uuid) => _taskByUuid[uuid]?.isRecurringTemplate != true)
+        .where((uuid) => _repo.findTaskByUuid(uuid)?.isRecurringTemplate != true)
         .toList();
     if (ids.isEmpty) return null;
 
-    try {
-      await _taskManager!.doneTasks(uuidStrs: ids);
-      if (_isCalendarSyncEnabled) {
-        final calendarErrors = <String>[];
-        for (final id in ids) {
-          try {
-            await _calendarService.deleteTask(id);
-          } catch (e) {
-            calendarErrors.add(id);
-          }
-        }
-        if (calendarErrors.isNotEmpty) {
-          return 'Calendar sync failed for ${calendarErrors.length} task(s).';
+    final result = await _repo.bulkMarkDone(ids);
+    if (result != null) return result;
+
+    if (_isCalendarSyncEnabled) {
+      final calendarErrors = <String>[];
+      for (final id in ids) {
+        try {
+          await _calendarService.deleteTask(id);
+        } catch (e) {
+          calendarErrors.add(id);
         }
       }
-      clearSelection();
-      await refreshPendingTasks();
-      await _refreshAutocompleteData();
-      return null;
-    } catch (e) {
-      return 'Bulk operation failed';
+      if (calendarErrors.isNotEmpty) {
+        return 'Calendar sync failed for ${calendarErrors.length} task(s).';
+      }
     }
+    clearSelection();
+    await refreshPendingTasks();
+    await refreshAutocompleteData();
+    return null;
   }
 
   Future<String?> bulkDelete() async {
-    if (_taskManager == null) return null;
     final ids = _selectedTaskUuids
-        .where((uuid) => _taskByUuid[uuid]?.isRecurringTemplate != true)
+        .where((uuid) => _repo.findTaskByUuid(uuid)?.isRecurringTemplate != true)
         .toList();
     if (ids.isEmpty) return null;
 
-    try {
-      await _taskManager!.deleteTasks(uuidStrs: ids);
-      if (_isCalendarSyncEnabled) {
-        final calendarErrors = <String>[];
-        for (final id in ids) {
-          try {
-            await _calendarService.deleteTask(id);
-          } catch (e) {
-            calendarErrors.add(id);
-          }
-        }
-        if (calendarErrors.isNotEmpty) {
-          return 'Calendar sync failed for ${calendarErrors.length} task(s).';
+    final result = await _repo.bulkDelete(ids);
+    if (result != null) return result;
+
+    if (_isCalendarSyncEnabled) {
+      final calendarErrors = <String>[];
+      for (final id in ids) {
+        try {
+          await _calendarService.deleteTask(id);
+        } catch (e) {
+          calendarErrors.add(id);
         }
       }
-      clearSelection();
-      await refreshPendingTasks();
-      await _refreshAutocompleteData();
-      return null;
-    } catch (e) {
-      return 'Bulk delete failed';
+      if (calendarErrors.isNotEmpty) {
+        return 'Calendar sync failed for ${calendarErrors.length} task(s).';
+      }
     }
+    clearSelection();
+    await refreshPendingTasks();
+    await refreshAutocompleteData();
+    return null;
   }
 
   Future<void> _loadFilterTabs(String profileId) async {
@@ -1208,7 +989,7 @@ class TaskState extends ChangeNotifier {
   }
 
   String getTaskDescription(String uuid) {
-    final task = _taskByUuid[uuid];
+    final task = _repo.findTaskByUuid(uuid);
     if (task != null) {
       return task.description;
     }
@@ -1216,35 +997,13 @@ class TaskState extends ChangeNotifier {
   }
 
   Future<int> getTotalTaskCount() async {
-    if (_taskManager == null) return 0;
-    try {
-      final effectiveQuery = effectiveSearchQuery;
-      final filter = TaskFilter(
-        status: null,
-        project: null,
-        tags: [],
-        searchTerm: effectiveQuery.isEmpty ? null : effectiveQuery,
-        offset: BigInt.from(0),
-        limit: BigInt.from(1),
-      );
-      final result = await _taskManager!.listTasks(filter: filter);
-      return result.totalCount.toInt();
-    } catch (_) {
-      return _readyTasks.length + _waitingTasks.length;
-    }
+    return await _repo.getTotalTaskCount(effectiveSearchQuery);
   }
 
   void clearProfile() {
-    _taskManager = null;
-    _readyTasks = [];
-    _waitingTasks = [];
-    _scheduledTasks = [];
-    _allTasks = [];
-    _allAutocompleteTasks = [];
-    _taskByUuid.clear();
+    _repo.clearProfile();
     _queueView = TaskQueueView.ready;
     _currentProfileId = null;
-    _recurrenceLimit = 1;
     _currentTabId = null;
     _lastParsedSearchQuery = null;
     _parsedSearchQuery = null;
@@ -1258,6 +1017,7 @@ class TaskState extends ChangeNotifier {
     _saveTabTimer?.cancel();
     _debounceFilterTimer?.cancel();
     _syncService.dispose();
+    _repo.dispose();
     super.dispose();
   }
 
@@ -1271,12 +1031,12 @@ class TaskState extends ChangeNotifier {
         profile.serverUrl,
         profile.uuid,
         profile.secret,
-        _recurrenceLimit,
+        _repo.recurrenceLimit,
       );
       if (error != null) return error;
 
       await refreshPendingTasks();
-      await _refreshAutocompleteData();
+      await refreshAutocompleteData();
       return null;
     } catch (e) {
       return e.toString();
@@ -1287,19 +1047,14 @@ class TaskState extends ChangeNotifier {
   }
 
   Future<String?> exportData({required bool includeDeleted}) async {
-    if (_taskManager == null) return null;
-    return await _taskManager!.exportTasks(includeDeleted: includeDeleted);
+    return await _repo.exportData(includeDeleted: includeDeleted);
   }
 
   Future<String?> importData(String jsonData) async {
-    if (_taskManager == null) return "Profile not loaded";
-    try {
-      await _taskManager!.importTasks(jsonData: jsonData);
-      await refreshPendingTasks();
-      await _refreshAutocompleteData();
-      return null;
-    } catch (e) {
-      return e.toString();
-    }
+    final result = await _repo.importData(jsonData);
+    if (result != null) return result;
+    await refreshPendingTasks();
+    await refreshAutocompleteData();
+    return null;
   }
 }
