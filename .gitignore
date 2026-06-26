@@ -1,4 +1,5 @@
 # Miscellaneous
+.env
 docs/
 *.apk
 *.apk.idsig

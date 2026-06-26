@@ -13,55 +13,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Free Disk Space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-          android: false
-          haskell: true
-          dotnet: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: "stable"
 
-      - name: Install Required Android Build Tools
+      - name: Install Android Build Tools
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "build-tools;29.0.3"
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "build-tools;34.0.0"
 
       - name: Setup Rust for Android
         run: |
           rustup target add aarch64-linux-android
-          NDK_PATH=$(find $ANDROID_HOME/ndk -name "ndk-build" | head -n1 | xargs dirname)
-          echo "NDK_PATH=$NDK_PATH" >> $GITHUB_ENV
-          echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
-          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" >> $GITHUB_ENV
-          echo "CC_aarch64-linux-android=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" >> $GITHUB_ENV
+          NDK_HOME="$ANDROID_HOME/ndk/$(ls $ANDROID_HOME/ndk | sort -V | tail -1)"
+          echo "ANDROID_NDK_HOME=$NDK_HOME" >> $GITHUB_ENV
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android-clang" >> $GITHUB_ENV
+          echo "CC_aarch64-linux-android=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android-clang" >> $GITHUB_ENV
 
-      - name: Cache all build artifacts
+      - name: Add build-tools to PATH
+        run: |
+          BUILD_TOOLS_VERSION=$(ls $ANDROID_HOME/build-tools | sort -V | tail -n1)
+          echo "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION" >> $GITHUB_PATH
+
+      - name: Cache dependencies
         uses: actions/cache@v4
         id: build-cache
         with:
           path: |
             ~/.cargo/
             build/rust_lib_*/
-            /opt/hostedtoolcache/flutter
-            ${{ env.PUB_CACHE }}
             .dart_tool/
             android/.gradle/
-          key: full-build-${{ runner.os }}-${{ hashFiles('**/Cargo.toml', '**/*.rs', 'pubspec.lock', 'android/build.gradle') }}
+          key: cache-${{ runner.os }}-${{ hashFiles('**/Cargo.toml', 'pubspec.lock') }}
           restore-keys: |
-            full-build-${{ runner.os }}-
-
-      - name: Add build-tools to PATH
-        run: |
-          BUILD_TOOLS_VERSION=$(ls $ANDROID_HOME/build-tools | sort -V | tail -n1)
-          echo "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION" >> $GITHUB_PATH
+            cache-${{ runner.os }}-
 
       - name: Build Debug APK
         if: github.event_name == 'push' && github.ref == 'refs/heads/master'
@@ -73,6 +59,7 @@ jobs:
         with:
           name: debug-apk
           path: build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
 
       - name: Build & Sign Release APKs
         if: startsWith(github.ref, 'refs/tags/')
