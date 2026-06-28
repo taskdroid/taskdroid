@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -84,7 +85,8 @@ class AppDrawer extends StatelessWidget {
   }
 
   String _getVersion() {
-    return AppVersion.version.split('+').first;
+    final base = AppVersion.version.split('+').first;
+    return kDebugMode ? '$base (debug)' : base;
   }
 
   Widget _buildHeader(
