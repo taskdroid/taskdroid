@@ -2927,7 +2927,6 @@ dependencies = [
  "taskchampion",
  "tokio",
  "tracing",
- "uuid",
 ]
 
 [[package]]
