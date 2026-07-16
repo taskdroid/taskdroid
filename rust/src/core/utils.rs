@@ -1,3 +1,4 @@
+use super::config::Taskrc;
 use super::error::{Result, TaskError};
 use super::models::{TaskAnnotation, TaskComputed, TaskCore, TaskSnapshot, TaskStatus, UdaPair};
 use std::str::FromStr;
@@ -6,7 +7,7 @@ use taskchampion::{
     chrono::{DateTime, Utc},
 };
 
-pub fn task_snapshot_from_task(t: taskchampion::Task) -> TaskSnapshot {
+pub fn task_snapshot_from_task(t: taskchampion::Task, config: &Taskrc) -> TaskSnapshot {
     let now = Utc::now();
     let next_tag = Tag::from_str("next").unwrap_or_else(|_| Tag::from_str("error").unwrap());
 
@@ -25,7 +26,7 @@ pub fn task_snapshot_from_task(t: taskchampion::Task) -> TaskSnapshot {
     };
 
     let computed = TaskComputed {
-        urgency: calculate_urgency(&t, now, &next_tag),
+        urgency: calculate_urgency(&t, now, &next_tag, config),
         is_active: t.is_active(),
         is_blocked: t.is_blocked(),
         is_blocking: t.is_blocking(),
@@ -173,58 +174,64 @@ pub fn format_iso8601(dt: DateTime<Utc>) -> String {
     dt.to_rfc3339()
 }
 
-fn calculate_urgency(t: &taskchampion::Task, now: DateTime<Utc>, next_tag: &Tag) -> f32 {
+pub(crate) fn calculate_urgency(
+    t: &taskchampion::Task,
+    now: DateTime<Utc>,
+    next_tag: &Tag,
+    config: &Taskrc,
+) -> f32 {
+    let c_next = config.get_float("urgency.user.tag.next.coefficient", 15.0);
+    let c_due = config.get_float("urgency.due.coefficient", 12.0);
+    let c_blocking = config.get_float("urgency.blocking.coefficient", 8.0);
+    let c_h = config.get_float("urgency.uda.priority.H.coefficient", 6.0);
+    let c_m = config.get_float("urgency.uda.priority.M.coefficient", 3.9);
+    let c_l = config.get_float("urgency.uda.priority.L.coefficient", 1.8);
+    let c_active = config.get_float("urgency.active.coefficient", 4.0);
+    let c_sched = config.get_float("urgency.scheduled.coefficient", 5.0);
+    let c_age = config.get_float("urgency.age.coefficient", 2.0);
+    let c_tags = config.get_float("urgency.tags.coefficient", 1.0);
+    let c_annotations = config.get_float("urgency.annotations.coefficient", 1.0);
+    let c_project = config.get_float("urgency.project.coefficient", 1.0);
+    let c_blocked = config.get_float("urgency.blocked.coefficient", -5.0);
+    let c_waiting = config.get_float("urgency.waiting.coefficient", -3.0);
+
     let mut urgency = 0.0;
-    const C_NEXT: f32 = 15.0;
-    const C_DUE: f32 = 12.0;
-    const C_BLOCKING: f32 = 8.0;
-    const C_H: f32 = 6.0;
-    const C_M: f32 = 3.9;
-    const C_L: f32 = 1.8;
-    const C_ACTIVE: f32 = 4.0;
-    const C_SCHED: f32 = 5.0;
-    const C_AGE: f32 = 2.0;
-    const C_TAGS: f32 = 1.0;
-    const C_ANNOTATIONS: f32 = 1.0;
-    const C_PROJECT: f32 = 1.0;
-    const C_BLOCKED: f32 = -5.0;
-    const C_WAITING: f32 = -3.0;
 
     if t.has_tag(next_tag) {
-        urgency += C_NEXT;
+        urgency += c_next;
     }
     if t.is_active() {
-        urgency += C_ACTIVE;
+        urgency += c_active;
     }
     if t.is_blocking() {
-        urgency += C_BLOCKING;
+        urgency += c_blocking;
     }
     if t.is_blocked() {
-        urgency += C_BLOCKED;
+        urgency += c_blocked;
     }
     if t.is_waiting() {
-        urgency += C_WAITING;
+        urgency += c_waiting;
     }
     if t.get_value("project").is_some() {
-        urgency += C_PROJECT;
+        urgency += c_project;
     }
 
     match t.get_priority() {
-        "H" => urgency += C_H,
-        "M" => urgency += C_M,
-        "L" => urgency += C_L,
+        "H" => urgency += c_h,
+        "M" => urgency += c_m,
+        "L" => urgency += c_l,
         _ => {}
     }
 
     if let Some(due) = t.get_due() {
         if due < now {
-            urgency += C_DUE;
+            urgency += c_due;
         } else {
             let days = (due - now).num_days();
             if days <= 14 {
-                urgency += C_DUE * (1.0 - (0.8 * (days as f32 / 14.0)));
+                urgency += c_due * (1.0 - (0.8 * (days as f32 / 14.0)));
             } else {
-                urgency += C_DUE * 0.2;
+                urgency += c_due * 0.2;
             }
         }
     }
@@ -235,28 +242,28 @@ fn calculate_urgency(t: &taskchampion::Task, now: DateTime<Utc>, next_tag: &Tag)
         .and_then(|s| parse_iso8601(s).ok())
     {
         if sched < now {
-            urgency += C_SCHED;
+            urgency += c_sched;
         }
     }
 
     if let Some(entry) = t.get_entry() {
         let days = (now - entry).num_days().max(0) as f32;
         let factor = (days / 365.0).min(1.0);
-        urgency += C_AGE * factor;
+        urgency += c_age * factor;
     }
 
     match t.get_tags().count() {
         0 => {}
-        1 => urgency += C_TAGS * 0.8,
-        2 => urgency += C_TAGS * 0.9,
-        _ => urgency += C_TAGS,
+        1 => urgency += c_tags * 0.8,
+        2 => urgency += c_tags * 0.9,
+        _ => urgency += c_tags,
     }
 
     match t.get_annotations().count() {
         0 => {}
-        1 => urgency += C_ANNOTATIONS * 0.8,
-        2 => urgency += C_ANNOTATIONS * 0.9,
-        _ => urgency += C_ANNOTATIONS,
+        1 => urgency += c_annotations * 0.8,
+        2 => urgency += c_annotations * 0.9,
+        _ => urgency += c_annotations,
     }
 
     urgency

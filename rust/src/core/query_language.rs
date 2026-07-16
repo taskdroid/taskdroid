@@ -1,3 +1,4 @@
+use super::config::Taskrc;
 use super::models::TaskStatus;
 use super::utils::map_tc_to_status;
 use taskchampion::{
@@ -133,8 +134,6 @@ enum Flag {
     Orphan,
 }
 
-const TASKWARRIOR_DEFAULT_DUE_DAYS: i64 = 7;
-
 pub fn matches_query(task: &taskchampion::Task, query: &str) -> bool {
     let trimmed = query.trim();
     if trimmed.is_empty() {
@@ -144,30 +143,58 @@ pub fn matches_query(task: &taskchampion::Task, query: &str) -> bool {
     let tokens = merge_comparison_tokens(merge_colon_tokens(tokenize(trimmed)));
     let mut parser = Parser::new(tokens);
     match parser.parse() {
-        Some(expr) => evaluate_expr(&expr, task, Utc::now()),
+        Some(expr) => evaluate_expr(&expr, task, Utc::now(), &Taskrc::default()),
         None => plain_text_match(task, trimmed),
     }
 }
 
-fn evaluate_expr(expr: &Expr, task: &taskchampion::Task, now: DateTime<Utc>) -> bool {
+pub fn matches_query_with_config(task: &taskchampion::Task, query: &str, config: &Taskrc) -> bool {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+
+    let tokens = merge_comparison_tokens(merge_colon_tokens(tokenize(trimmed)));
+    let mut parser = Parser::new(tokens);
+    match parser.parse() {
+        Some(expr) => evaluate_expr(&expr, task, Utc::now(), config),
+        None => plain_text_match(task, trimmed),
+    }
+}
+
+fn evaluate_expr(
+    expr: &Expr,
+    task: &taskchampion::Task,
+    now: DateTime<Utc>,
+    config: &Taskrc,
+) -> bool {
     match expr {
-        Expr::And(children) => children.iter().all(|child| evaluate_expr(child, task, now)),
-        Expr::Or(children) => children.iter().any(|child| evaluate_expr(child, task, now)),
+        Expr::And(children) => children
+            .iter()
+            .all(|child| evaluate_expr(child, task, now, config)),
+        Expr::Or(children) => children
+            .iter()
+            .any(|child| evaluate_expr(child, task, now, config)),
         Expr::Xor(children) => {
             children.iter().fold(0usize, |count, child| {
-                if evaluate_expr(child, task, now) {
+                if evaluate_expr(child, task, now, config) {
                     count + 1
                 } else {
                     count
                 }
             }) == 1
         }
-        Expr::Not(child) => !evaluate_expr(child, task, now),
-        Expr::Term(term) => evaluate_term(term, task, now),
+        Expr::Not(child) => !evaluate_expr(child, task, now, config),
+        Expr::Term(term) => evaluate_term(term, task, now, config),
     }
 }
 
-fn evaluate_term(term: &Term, task: &taskchampion::Task, now: DateTime<Utc>) -> bool {
+fn evaluate_term(
+    term: &Term,
+    task: &taskchampion::Task,
+    now: DateTime<Utc>,
+    config: &Taskrc,
+) -> bool {
     match term {
         Term::Text(query) => plain_text_match(task, query),
         Term::Tag(tag) => {
@@ -207,7 +234,7 @@ fn evaluate_term(term: &Term, task: &taskchampion::Task, now: DateTime<Utc>) -> 
             .to_lowercase()
             .starts_with(&prefix.to_lowercase()),
         Term::Date { field, op, value } => evaluate_date_term(task, *field, *op, *value),
-        Term::Flag(flag) => evaluate_flag(task, *flag, now),
+        Term::Flag(flag) => evaluate_flag(task, *flag, now, config),
         Term::Equals { key, value } => {
             let task_val = read_attribute(task, key);
             task_val.eq_ignore_ascii_case(value)
@@ -299,7 +326,7 @@ fn evaluate_term(term: &Term, task: &taskchampion::Task, now: DateTime<Utc>) -> 
                 }
             }
         }
-        Term::Negated(inner) => !evaluate_term(inner, task, now),
+        Term::Negated(inner) => !evaluate_term(inner, task, now, config),
     }
 }
 
@@ -394,7 +421,12 @@ fn evaluate_date_term(
     }
 }
 
-fn evaluate_flag(task: &taskchampion::Task, flag: Flag, now: DateTime<Utc>) -> bool {
+fn evaluate_flag(
+    task: &taskchampion::Task,
+    flag: Flag,
+    now: DateTime<Utc>,
+    config: &Taskrc,
+) -> bool {
     match flag {
         Flag::Ready => {
             map_tc_to_status(task.get_status()) == TaskStatus::Pending
@@ -403,8 +435,11 @@ fn evaluate_flag(task: &taskchampion::Task, flag: Flag, now: DateTime<Utc>) -> b
                 && !is_scheduled_future(task, now)
         }
         Flag::Active => task.is_active(),
-        Flag::Due => read_date_field(task, DateField::Due)
-            .is_some_and(|date| date <= now + Duration::days(TASKWARRIOR_DEFAULT_DUE_DAYS)),
+        Flag::Due => {
+            let due_days = config.get_int("due", 7);
+            read_date_field(task, DateField::Due)
+                .is_some_and(|date| date <= now + Duration::days(due_days))
+        }
         Flag::DueToday => read_date_field(task, DateField::Due)
             .is_some_and(|date| date.date_naive() == now.date_naive()),
         Flag::Overdue => read_date_field(task, DateField::Due).is_some_and(|date| date < now),

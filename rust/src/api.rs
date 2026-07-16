@@ -447,4 +447,39 @@ impl TaskManager {
             map_error(self.inner.import_tasks(json_data).await)
         }
     }
+
+    pub async fn get_all_config(&self) -> Result<Vec<UdaPair>> {
+        let pairs = map_error(self.inner.get_all_config().await)?;
+        Ok(pairs
+            .into_iter()
+            .map(|(k, v)| UdaPair { key: k, value: v })
+            .collect())
+    }
+
+    pub async fn get_config_value(&self, key: String) -> Result<Option<String>> {
+        map_error(self.inner.get_config_value(key).await)
+    }
+
+    pub async fn validate_taskrc(&self, content: String) -> Result<Vec<ConfigIssue>> {
+        let issues = map_error(self.inner.validate_taskrc(content).await)?;
+        Ok(issues
+            .into_iter()
+            .map(|issue| ConfigIssue {
+                line: issue.line as i32,
+                kind: format!("{:?}", issue.kind).to_lowercase(),
+                message: issue.message,
+            })
+            .collect())
+    }
+
+    pub async fn set_config_value(&self, key: String, value: String) -> Result<()> {
+        map_error(self.inner.set_config_value(key, value).await)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigIssue {
+    pub line: i32,
+    pub kind: String,
+    pub message: String,
 }
