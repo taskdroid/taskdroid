@@ -9,6 +9,7 @@
 //! Run: cargo test --lib compat -- --show-output
 
 use crate::core::Result;
+use crate::core::config::Taskrc;
 use crate::core::manager::{RecurrenceRule, WorkerState, due_for_index};
 use crate::core::models::{CreateTaskParams, TaskSnapshot, TaskStatus, UdaPair, UpdateTaskParams};
 use crate::core::query_language::{matches_query, task_with};
@@ -33,7 +34,7 @@ impl TestContext {
         Self {
             state: WorkerState {
                 replica: Some(Replica::new(storage)),
-                recurrence_limit: 1,
+                config: Taskrc::default(),
             },
         }
     }
@@ -66,9 +67,9 @@ impl TestContext {
 
     /// `task list` - triggers maintenance (GC + recurrence generation)
     fn maintain(&mut self) {
+        let limit = self.state.recurrence_limit();
         let replica = self.state.replica.as_mut().expect("replica exists");
-        WorkerState::apply_maintenance(replica, self.state.recurrence_limit)
-            .expect("maintenance must not error");
+        WorkerState::apply_maintenance(replica, limit).expect("maintenance must not error");
     }
 
     /// All tasks as snapshots.
@@ -78,7 +79,7 @@ impl TestContext {
             .all_tasks()
             .expect("all_tasks must not error")
             .into_iter()
-            .map(|(_, t)| task_snapshot_from_task(t))
+            .map(|(_, t)| task_snapshot_from_task(t, &self.state.config))
             .collect()
     }
 
@@ -275,7 +276,7 @@ fn tw_test_recurrence_limit() {
     let mut ctx = TestContext::new();
     let uuid = ctx.add("one", Some(&ctx.future_due()), Some("weekly"), None, None);
 
-    ctx.state.recurrence_limit = 3;
+    ctx.state.config.set("recurrence.limit", "3");
 
     ctx.maintain();
 
@@ -529,7 +530,7 @@ fn tw_test_failed_upgrade_no_due() {
 #[test]
 fn tw_test_recurrence_disabled() {
     let mut ctx = TestContext::new();
-    ctx.state.recurrence_limit = 0;
+    ctx.state.config.set("recurrence.limit", "0");
 
     let uuid = ctx.add("one", Some(&ctx.future_due()), Some("daily"), None, None);
     ctx.maintain();
@@ -595,7 +596,7 @@ fn tw_test_delete_parent() {
 #[test]
 fn tw_test_delete_child_with_siblings() {
     let mut ctx = TestContext::new();
-    ctx.state.recurrence_limit = 5;
+    ctx.state.config.set("recurrence.limit", "5");
     let uuid = ctx.add("one", Some(&ctx.future_due()), Some("daily"), None, None);
     ctx.maintain();
 
@@ -629,7 +630,7 @@ fn tw_test_delete_child_with_siblings() {
 #[test]
 fn tw_test_append_propagate() {
     let mut ctx = TestContext::new();
-    ctx.state.recurrence_limit = 2;
+    ctx.state.config.set("recurrence.limit", "2");
     let uuid = ctx.add("one", Some(&ctx.future_due()), Some("daily"), None, None);
     ctx.maintain();
 
@@ -661,7 +662,7 @@ fn tw_test_append_propagate() {
 #[test]
 fn tw_test_prepend_propagate() {
     let mut ctx = TestContext::new();
-    ctx.state.recurrence_limit = 2;
+    ctx.state.config.set("recurrence.limit", "2");
     let uuid = ctx.add("one", Some(&ctx.future_due()), Some("daily"), None, None);
     ctx.maintain();
 
@@ -697,7 +698,7 @@ fn tw_test_prepend_propagate() {
 #[test]
 fn tw_test_change_propagation() {
     let mut ctx = TestContext::new();
-    ctx.state.recurrence_limit = 3;
+    ctx.state.config.set("recurrence.limit", "3");
     let uuid = ctx.add(
         "complex",
         Some(&ctx.future_due()),

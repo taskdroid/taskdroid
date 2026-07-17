@@ -29,6 +29,12 @@ abstract class TaskManager implements RustOpaqueInterface {
 
   Future<String> exportTasks({required bool includeDeleted});
 
+  Future<List<UdaPair>> getAllConfig();
+
+  Future<String?> getConfigValue({required String key});
+
+  Future<List<ConfigIssue>> validateTaskrc({required String content});
+
   Future<TaskView> getTask({required String uuidStr});
 
   Future<BigInt> importTasks({required String jsonData});
@@ -38,6 +44,8 @@ abstract class TaskManager implements RustOpaqueInterface {
   Future<void> loadProfile({required String directoryPath});
 
   factory TaskManager() => RustLib.instance.api.crateApiTaskManagerNew();
+
+  Future<void> setConfigValue({required String key, required String value});
 
   Future<void> setRecurrenceLimit({required BigInt limit});
 
@@ -56,6 +64,18 @@ abstract class TaskManager implements RustOpaqueInterface {
   Future<void> updateTask({
     required String uuidStr,
     required UpdateTaskParams params,
+  });
+}
+
+class ConfigIssue {
+  final int line;
+  final String kind;
+  final String message;
+
+  const ConfigIssue({
+    required this.line,
+    required this.kind,
+    required this.message,
   });
 }
 

@@ -1,7 +1,8 @@
+use super::config::{ConfigIssue, Taskrc};
 use super::error::{Result, TaskError};
 use super::models::{CreateTaskParams, TaskSnapshot, UpdateTaskParams};
 use super::query::{Pagination, Query, QueryResult, SortField, TaskFilter};
-use super::query_language::matches_query;
+use super::query_language::matches_query_with_config;
 use super::utils::{
     parse_date_opt_str_strict, parse_date_opt_strict, parse_iso8601, task_snapshot_from_task,
 };
@@ -20,7 +21,6 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, info, warn};
 
 const WORKER_QUEUE_CAPACITY: usize = 256;
-const DEFAULT_RECURRENCE_LIMIT: usize = 1;
 
 type WorkerReply<T> = oneshot::Sender<Result<T>>;
 
@@ -102,6 +102,18 @@ enum WorkerCommand {
         json_data: String,
         reply: WorkerReply<usize>,
     },
+    GetAllConfig {
+        reply: WorkerReply<Vec<(String, String)>>,
+    },
+    GetConfigValue {
+        key: String,
+        reply: WorkerReply<Option<String>>,
+    },
+    SetConfigValue {
+        key: String,
+        value: String,
+        reply: WorkerReply<()>,
+    },
     Shutdown,
 }
 
@@ -127,6 +139,9 @@ impl WorkerCommand {
             Self::Sync { .. } => "sync",
             Self::ExportTasks { .. } => "export_tasks",
             Self::ImportTasks { .. } => "import_tasks",
+            Self::GetAllConfig { .. } => "get_all_config",
+            Self::GetConfigValue { .. } => "get_config_value",
+            Self::SetConfigValue { .. } => "set_config_value",
             Self::Shutdown => "shutdown",
         }
     }
@@ -141,25 +156,29 @@ impl WorkerCommand {
 
 pub(crate) struct WorkerState {
     pub(crate) replica: Option<Replica>,
-    pub(crate) recurrence_limit: usize,
+    pub(crate) config: Taskrc,
 }
 
 impl WorkerState {
     pub(crate) fn new() -> Self {
         Self {
             replica: None,
-            recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
+            config: Taskrc::default(),
         }
     }
 
-    fn normalized_recurrence_limit(limit: usize) -> usize {
-        limit.min(128)
+    pub(crate) fn recurrence_limit(&self) -> usize {
+        self.config.get_int("recurrence.limit", 1).clamp(0, 128) as usize
     }
 
     fn set_recurrence_limit(&mut self, limit: usize) -> Result<()> {
-        self.recurrence_limit = Self::normalized_recurrence_limit(limit);
+        let limit = limit.min(128);
+        self.config.set("recurrence.limit", &limit.to_string());
+        if self.config.has_file() {
+            self.config.save()?;
+        }
         if let Some(replica) = self.replica.as_mut() {
-            Self::apply_maintenance(replica, self.recurrence_limit)?;
+            Self::apply_maintenance(replica, limit)?;
         }
         Ok(())
     }
@@ -171,16 +190,15 @@ impl WorkerState {
     }
 
     fn load_profile(&mut self, directory_path: String) -> Result<()> {
-        let mut path = PathBuf::from(directory_path);
-        path.push("taskdb");
+        let dir = PathBuf::from(&directory_path);
 
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| TaskError::storage(format!("Failed to create directory: {e}")))?;
-        }
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| TaskError::storage(format!("Failed to create profile directory: {e}")))?;
 
+        // Open taskchampion storage
+        let taskdb_dir = dir.join("taskdb");
         let storage = StorageConfig::OnDisk {
-            taskdb_dir: path,
+            taskdb_dir,
             create_if_missing: true,
             access_mode: taskchampion::storage::AccessMode::ReadWrite,
         }
@@ -188,12 +206,28 @@ impl WorkerState {
         .map_err(|e| TaskError::storage(format!("Storage error: {e}")))?;
 
         self.replica = Some(Replica::new(storage));
+
+        // Load taskrc config from disk (if it exists); defaults are always
+        // built into the in-memory config and only user overrides are persisted.
+        let taskrc_path = dir.join("taskrc");
+        if taskrc_path.exists() {
+            let mut file_config = Taskrc::new();
+            file_config.load_defaults();
+            file_config
+                .parse_file(&taskrc_path)
+                .map_err(|e| TaskError::storage(format!("Failed to parse taskrc: {e}")))?;
+            self.config = file_config;
+        } else {
+            self.config = Taskrc::default();
+            self.config.set_file_path(taskrc_path);
+        }
+
         Ok(())
     }
 
     fn query_tasks(&mut self, query: Query) -> Result<QueryResult> {
         let started_at = std::time::Instant::now();
-        let recurrence_limit = self.recurrence_limit;
+        let recurrence_limit = self.recurrence_limit();
         let replica = self.replica_mut()?;
         Self::apply_maintenance(replica, recurrence_limit)?;
         let all_tasks: Vec<_> = replica
@@ -204,8 +238,8 @@ impl WorkerState {
 
         let mut filtered: Vec<TaskSnapshot> = all_tasks
             .into_iter()
-            .filter(|(_, task)| matches_filter(task, &query.filter))
-            .map(|(_, task)| task_snapshot_from_task(task))
+            .filter(|(_, task)| matches_filter(task, &query.filter, &self.config))
+            .map(|(_, task)| task_snapshot_from_task(task, &self.config))
             .collect();
 
         sort_snapshots(&mut filtered, query.sort.field, query.sort.descending);
@@ -238,14 +272,14 @@ impl WorkerState {
 
     pub(crate) fn get_task(&mut self, uuid_str: String) -> Result<TaskSnapshot> {
         let uuid = parse_uuid(&uuid_str)?;
-        let recurrence_limit = self.recurrence_limit;
+        let recurrence_limit = self.recurrence_limit();
         let replica = self.replica_mut()?;
         Self::apply_maintenance(replica, recurrence_limit)?;
         let task = replica
             .get_task(uuid)
             .map_err(|e| TaskError::storage(format!("Failed to fetch task: {e}")))?
             .ok_or_else(|| TaskError::not_found(format!("Task `{uuid_str}` not found")))?;
-        Ok(task_snapshot_from_task(task))
+        Ok(task_snapshot_from_task(task, &self.config))
     }
 
     fn count_undo_points(&mut self) -> Result<usize> {
@@ -270,7 +304,7 @@ impl WorkerState {
     }
 
     pub(crate) fn add_task(&mut self, params: CreateTaskParams) -> Result<String> {
-        let recurrence_limit = self.recurrence_limit;
+        let recurrence_limit = self.recurrence_limit();
         let replica = self.replica_mut()?;
         let mut ops = Operations::new();
         ops.push(Operation::UndoPoint);
@@ -361,7 +395,7 @@ impl WorkerState {
 
     pub(crate) fn update_task(&mut self, uuid_str: String, params: UpdateTaskParams) -> Result<()> {
         let uuid = parse_uuid(&uuid_str)?;
-        let recurrence_limit = self.recurrence_limit;
+        let recurrence_limit = self.recurrence_limit();
         let replica = self.replica_mut()?;
         let original_task = replica
             .get_task(uuid)
@@ -668,7 +702,7 @@ impl WorkerState {
 
     fn sync(&mut self, url: String, client_id: String, encryption_secret: String) -> Result<()> {
         let started_at = std::time::Instant::now();
-        let recurrence_limit = self.recurrence_limit;
+        let recurrence_limit = self.recurrence_limit();
         let config = ServerConfig::Remote {
             url,
             client_id: parse_uuid(&client_id)?,
@@ -694,7 +728,7 @@ impl WorkerState {
     }
 
     pub(crate) fn export_tasks(&mut self, include_deleted: bool) -> Result<String> {
-        let recurrence_limit = self.recurrence_limit;
+        let recurrence_limit = self.recurrence_limit();
         let replica = self.replica_mut()?;
         Self::apply_maintenance(replica, recurrence_limit)?;
         let snapshots = replica
@@ -702,7 +736,7 @@ impl WorkerState {
             .map_err(|e| TaskError::storage(format!("Failed to fetch tasks: {e}")))?
             .into_iter()
             .filter(|(_, task)| include_deleted || task.get_status() != TcStatus::Deleted)
-            .map(|(_, task)| task_snapshot_from_task(task))
+            .map(|(_, task)| task_snapshot_from_task(task, &self.config))
             .collect::<Vec<_>>();
         serde_json::to_string_pretty(&snapshots)
             .map_err(|e| TaskError::storage(format!("Failed to serialize tasks: {e}")))
@@ -712,7 +746,7 @@ impl WorkerState {
         let snapshots: Vec<TaskSnapshot> = serde_json::from_str(&json_data)
             .map_err(|e| TaskError::invalid_input(format!("Invalid import payload: {e}")))?;
         let count = snapshots.len();
-        let recurrence_limit = self.recurrence_limit;
+        let recurrence_limit = self.recurrence_limit();
         let replica = self.replica_mut()?;
         let mut ops = Operations::new();
         ops.push(Operation::UndoPoint);
@@ -1123,7 +1157,7 @@ impl WorkerState {
         status: Option<TcStatus>,
         complete: bool,
     ) -> Result<()> {
-        let recurrence_limit = self.recurrence_limit;
+        let recurrence_limit = self.recurrence_limit();
         let replica = self.replica_mut()?;
         let mut ops = Operations::new();
         ops.push(Operation::UndoPoint);
@@ -1170,7 +1204,7 @@ impl WorkerState {
     }
 
     fn set_active_for_tasks(&mut self, uuid_strs: Vec<String>, active: bool) -> Result<()> {
-        let recurrence_limit = self.recurrence_limit;
+        let recurrence_limit = self.recurrence_limit();
         let replica = self.replica_mut()?;
         let mut ops = Operations::new();
         ops.push(Operation::UndoPoint);
@@ -1208,6 +1242,28 @@ impl WorkerState {
             .commit_operations(ops)
             .map_err(|e| TaskError::storage(format!("Failed to commit task updates: {e}")))?;
         Self::apply_maintenance(replica, recurrence_limit)?;
+        Ok(())
+    }
+
+    // -- Config operations --
+
+    fn get_all_config(&self) -> Vec<(String, String)> {
+        self.config
+            .all()
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn get_config_value(&self, key: String) -> Option<String> {
+        self.config.get(&key).map(|s| s.to_string())
+    }
+
+    fn set_config_value(&mut self, key: String, value: String) -> Result<()> {
+        self.config.set(&key, &value);
+        if self.config.has_file() {
+            self.config.save()?;
+        }
         Ok(())
     }
 }
@@ -1478,7 +1534,7 @@ fn parse_optional_datetime_string(
     parse_optional_datetime(value, field, uuid).map(|opt| opt.map(|dt| dt.to_rfc3339()))
 }
 
-fn matches_filter(task: &taskchampion::Task, filter: &TaskFilter) -> bool {
+fn matches_filter(task: &taskchampion::Task, filter: &TaskFilter, config: &Taskrc) -> bool {
     let task_status = super::utils::map_tc_to_status(task.get_status());
     if let Some(status) = filter.status {
         if task_status != status {
@@ -1492,7 +1548,7 @@ fn matches_filter(task: &taskchampion::Task, filter: &TaskFilter) -> bool {
         }
     }
     if let Some(term) = &filter.search_term {
-        if !matches_query(task, term) {
+        if !matches_query_with_config(task, term, config) {
             return false;
         }
     }
@@ -1769,7 +1825,7 @@ mod tests {
 
         replica.commit_operations(ops).unwrap();
 
-        WorkerState::ensure_recurrence_instances(&mut replica, DEFAULT_RECURRENCE_LIMIT).unwrap();
+        WorkerState::ensure_recurrence_instances(&mut replica, 1).unwrap();
 
         let template_uuid_text = template_uuid.to_string();
         let children: Vec<_> = replica
@@ -1814,7 +1870,7 @@ mod tests {
 
         replica.commit_operations(ops).unwrap();
 
-        WorkerState::ensure_recurrence_instances(&mut replica, DEFAULT_RECURRENCE_LIMIT).unwrap();
+        WorkerState::ensure_recurrence_instances(&mut replica, 1).unwrap();
 
         let template_uuid_text = template_uuid.to_string();
         let children: Vec<_> = replica
@@ -1916,7 +1972,7 @@ mod tests {
             .expect("in-memory storage");
         let mut state = WorkerState {
             replica: Some(Replica::new(storage)),
-            recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
+            config: Taskrc::default(),
         };
 
         state
@@ -1950,6 +2006,36 @@ mod tests {
     }
 
     #[test]
+    fn recurrence_limit_negative_is_clamped_to_zero() {
+        let mut state = WorkerState {
+            replica: None,
+            config: Taskrc::default(),
+        };
+        state.config.set("recurrence.limit", "-1");
+        assert_eq!(state.recurrence_limit(), 0);
+    }
+
+    #[test]
+    fn recurrence_limit_above_128_is_clamped() {
+        let mut state = WorkerState {
+            replica: None,
+            config: Taskrc::default(),
+        };
+        state.config.set("recurrence.limit", "200");
+        assert_eq!(state.recurrence_limit(), 128);
+    }
+
+    #[test]
+    fn recurrence_limit_normal_value() {
+        let mut state = WorkerState {
+            replica: None,
+            config: Taskrc::default(),
+        };
+        state.config.set("recurrence.limit", "5");
+        assert_eq!(state.recurrence_limit(), 5);
+    }
+
+    #[test]
     fn recurrence_limit_applies_to_synced_templates_without_uda() {
         let storage = StorageConfig::InMemory
             .into_storage()
@@ -1980,7 +2066,7 @@ mod tests {
 
         let mut state = WorkerState {
             replica: Some(replica),
-            recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
+            config: Taskrc::default(),
         };
         state.set_recurrence_limit(2).expect("set recurrence limit");
 
@@ -2095,7 +2181,7 @@ mod tests {
 
         let mut state = WorkerState {
             replica: Some(replica),
-            recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
+            config: Taskrc::default(),
         };
         let result = state.update_task(
             template_uuid.to_string(),
@@ -2138,7 +2224,7 @@ mod tests {
             .expect("in-memory storage");
         let mut state = WorkerState {
             replica: Some(Replica::new(storage)),
-            recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
+            config: Taskrc::default(),
         };
 
         state.set_recurrence_limit(2).expect("set recurrence limit");
@@ -2194,7 +2280,7 @@ mod tests {
             .expect("in-memory storage");
         let mut state = WorkerState {
             replica: Some(Replica::new(storage)),
-            recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
+            config: Taskrc::default(),
         };
 
         let template_uuid = state
@@ -2269,7 +2355,7 @@ mod tests {
             .expect("in-memory storage");
         let mut state = WorkerState {
             replica: Some(Replica::new(storage)),
-            recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
+            config: Taskrc::default(),
         };
 
         let template_uuid = state
@@ -2304,7 +2390,7 @@ mod tests {
             .expect("in-memory storage");
         let mut state = WorkerState {
             replica: Some(Replica::new(storage)),
-            recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
+            config: Taskrc::default(),
         };
 
         let template_uuid = state
@@ -2341,7 +2427,7 @@ mod tests {
         let replica = Replica::new(storage);
         let mut state = WorkerState {
             replica: Some(replica),
-            recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
+            config: Taskrc::default(),
         };
 
         let result = state.add_task(CreateTaskParams {
@@ -2369,7 +2455,7 @@ mod tests {
         let replica = Replica::new(storage);
         let mut state = WorkerState {
             replica: Some(replica),
-            recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
+            config: Taskrc::default(),
         };
 
         let payload = serde_json::to_string(&vec![TaskSnapshot {
@@ -2500,7 +2586,7 @@ mod tests {
             .expect("in-memory storage");
         let mut state = WorkerState {
             replica: Some(Replica::new(storage)),
-            recurrence_limit: DEFAULT_RECURRENCE_LIMIT,
+            config: Taskrc::default(),
         };
 
         for index in 0..3 {
@@ -2628,6 +2714,18 @@ fn worker_loop(mut receiver: mpsc::Receiver<WorkerCommand>) {
                 let _ = reply.send(state.import_tasks(json_data));
                 false
             }
+            WorkerCommand::GetAllConfig { reply } => {
+                let _ = reply.send(Ok(state.get_all_config()));
+                false
+            }
+            WorkerCommand::GetConfigValue { key, reply } => {
+                let _ = reply.send(Ok(state.get_config_value(key)));
+                false
+            }
+            WorkerCommand::SetConfigValue { key, value, reply } => {
+                let _ = reply.send(state.set_config_value(key, value));
+                false
+            }
             WorkerCommand::Shutdown => {
                 info!("worker received shutdown");
                 true
@@ -2741,6 +2839,10 @@ impl TaskManager {
             .await
     }
 
+    pub async fn validate_taskrc(&self, content: String) -> Result<Vec<ConfigIssue>> {
+        Ok(Taskrc::validate(&content))
+    }
+
     pub async fn update_task(&self, uuid_str: String, params: UpdateTaskParams) -> Result<()> {
         self.request(|reply| WorkerCommand::UpdateTask {
             uuid_str,
@@ -2820,6 +2922,21 @@ impl TaskManager {
 
     pub async fn import_tasks(&self, json_data: String) -> Result<usize> {
         self.request(|reply| WorkerCommand::ImportTasks { json_data, reply })
+            .await
+    }
+
+    pub async fn get_all_config(&self) -> Result<Vec<(String, String)>> {
+        self.request(|reply| WorkerCommand::GetAllConfig { reply })
+            .await
+    }
+
+    pub async fn get_config_value(&self, key: String) -> Result<Option<String>> {
+        self.request(|reply| WorkerCommand::GetConfigValue { key, reply })
+            .await
+    }
+
+    pub async fn set_config_value(&self, key: String, value: String) -> Result<()> {
+        self.request(|reply| WorkerCommand::SetConfigValue { key, value, reply })
             .await
     }
 }

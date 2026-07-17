@@ -84,7 +84,6 @@ class SyncIsolateService {
     String url,
     String clientId,
     String encryptionSecret,
-    int recurrenceLimit,
   ) async {
     await _ensureIsolate();
 
@@ -99,7 +98,6 @@ class SyncIsolateService {
       'url': url,
       'clientId': clientId,
       'encryptionSecret': encryptionSecret,
-      'recurrenceLimit': recurrenceLimit,
     });
 
     final response = await completer.future;
@@ -140,9 +138,6 @@ Future<void> _syncIsolateEntry(SendPort mainSendPort) async {
           loadedDirectory = dir;
         }
 
-        await manager.setRecurrenceLimit(
-          limit: BigInt.from(map['recurrenceLimit'] as int),
-        );
         await manager.sync_(
           url: map['url'] as String,
           clientId: map['clientId'] as String,

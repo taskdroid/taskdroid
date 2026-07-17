@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:taskdroid/providers/profile_state.dart';
+import 'package:taskdroid/providers/task_state.dart';
 import 'package:taskdroid/models/profile.dart';
 import 'package:taskdroid/services/profile_storage.dart';
+import 'package:taskdroid/services/taskrc_config_service.dart';
+import 'package:taskdroid/src/rust/api.dart';
 import 'package:taskdroid/widgets/app_drawer.dart';
 import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
@@ -27,6 +31,10 @@ class _CredentialsPageState extends State<CredentialsPage> {
   bool _isEditing = false;
   String? _editingProfileId;
   ProfileState? _profileState;
+
+  Map<String, String> _configValues = {};
+  bool _configLoading = false;
+  String? _configPath;
 
   @override
   void initState() {
@@ -58,6 +66,7 @@ class _CredentialsPageState extends State<CredentialsPage> {
         _isEditing = true;
         _testResult = null;
       });
+      _loadConfig(profile);
     } else if (profile == null && _isEditing) {
       _clearForm();
     }
@@ -72,6 +81,9 @@ class _CredentialsPageState extends State<CredentialsPage> {
       _editingProfileId = null;
       _isEditing = false;
       _testResult = null;
+      _configValues = {};
+      _configPath = null;
+      _configLoading = false;
     });
   }
 
@@ -85,9 +97,9 @@ class _CredentialsPageState extends State<CredentialsPage> {
     if (nameError != null) {
       if (!mounted) return;
       setState(() => _isLoading = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(nameError)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(nameError)));
       return;
     }
     final existingProfile = profileState.currentProfile;
@@ -174,6 +186,37 @@ class _CredentialsPageState extends State<CredentialsPage> {
       setState(() => _testResult = 'Error: Connection failed');
     } finally {
       setState(() => _isTesting = false);
+    }
+  }
+
+  Future<void> _loadConfig(Profile profile) async {
+    setState(() => _configLoading = true);
+    try {
+      final taskState = context.read<TaskState>();
+      if (taskState.currentProfileId != profile.id) {
+        await taskState.loadProfile(profile, forceReload: true);
+      }
+      if (!mounted) return;
+      final tm = taskState.taskManager;
+      if (tm != null) {
+        final service = TaskrcConfigService(tm);
+        final values = await service.getAllConfig();
+        final path = await TaskrcConfigService.resolveTaskrcPath(profile);
+        if (!mounted) return;
+        setState(() {
+          _configValues = values;
+          _configPath = path;
+        });
+      } else if (mounted) {
+        setState(() {
+          _configValues = {};
+          _configPath = null;
+        });
+      }
+    } catch (e) {
+      debugPrint('Failed to load config: $e');
+    } finally {
+      if (mounted) setState(() => _configLoading = false);
     }
   }
 
@@ -280,6 +323,14 @@ class _CredentialsPageState extends State<CredentialsPage> {
                         if (id == null) {
                           _clearForm();
                         } else {
+                          final profile = profileState.profiles.firstWhere(
+                            (p) => p.id == id,
+                          );
+                          await context.read<TaskState>().loadProfile(
+                            profile,
+                            forceReload: true,
+                          );
+                          if (!context.mounted) return;
                           await profileState.setCurrentProfile(id);
                         }
                       },
@@ -302,7 +353,8 @@ class _CredentialsPageState extends State<CredentialsPage> {
                             hintText: 'e.g., Work, Personal',
                           ),
                           validator: (v) {
-                            if (v == null || v.trim().isEmpty) return 'Required';
+                            if (v == null || v.trim().isEmpty)
+                              return 'Required';
                             final conflict = _validateProfileName(
                               context.read<ProfileState>(),
                             );
@@ -426,6 +478,11 @@ class _CredentialsPageState extends State<CredentialsPage> {
                       ],
                     ),
                   ),
+
+                  const SizedBox(height: 24),
+
+                  _buildSectionHeader(context, 'Taskwarrior Config'),
+                  _buildConfigSection(context, profileState),
                 ],
               ),
             ),
@@ -433,6 +490,519 @@ class _CredentialsPageState extends State<CredentialsPage> {
         },
       ),
     );
+  }
+
+  Widget _buildConfigSection(BuildContext context, ProfileState profileState) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final profile = profileState.currentProfile;
+
+    if (profile == null || !_isEditing || _editingProfileId != profile.id) {
+      return _buildGroupContainer(
+        context,
+        padding: const EdgeInsets.all(20),
+        child: Text(
+          'Select a profile to view config',
+          style: TextStyle(color: colorScheme.onSurfaceVariant),
+        ),
+      );
+    }
+
+    final taskState = context.read<TaskState>();
+    final canAccessConfig = taskState.taskManager != null;
+    final hasConfig = _configValues.isNotEmpty;
+    final isLoaded = !_configLoading;
+
+    return _buildGroupContainer(
+      context,
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // display file path
+          Row(
+            children: [
+              Icon(
+                Icons.description_outlined,
+                size: 18,
+                color: colorScheme.primary,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _configPath ?? 'taskrc',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: colorScheme.onSurfaceVariant,
+                    fontFamily: 'monospace',
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Taskwarrior-compatible config file in your profile data directory',
+            style: TextStyle(fontSize: 11, color: colorScheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 16),
+
+          if (!isLoaded)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.all(16),
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          else if (!canAccessConfig)
+            Text(
+              'Load a profile to access config',
+              style: TextStyle(color: colorScheme.onSurfaceVariant),
+            )
+          else if (!hasConfig)
+            Text(
+              'No config loaded',
+              style: TextStyle(color: colorScheme.onSurfaceVariant),
+            )
+          else
+            _buildConfigEntries(context, colorScheme),
+
+          const SizedBox(height: 16),
+
+          // action buttons
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: canAccessConfig && hasConfig
+                      ? () => _showConfigEditor(context)
+                      : null,
+                  icon: const Icon(Icons.edit_outlined, size: 16),
+                  label: const Text('Edit Config'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => _showRawConfigEditor(context, profile),
+                  icon: const Icon(Icons.code, size: 16),
+                  label: const Text('View Raw'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildConfigEntries(BuildContext context, ColorScheme colorScheme) {
+    final priorityKeys = [
+      'urgency.due.coefficient',
+      'urgency.active.coefficient',
+      'urgency.blocking.coefficient',
+      'urgency.scheduled.coefficient',
+      'urgency.age.coefficient',
+      'urgency.uda.priority.H.coefficient',
+      'urgency.uda.priority.M.coefficient',
+      'urgency.uda.priority.L.coefficient',
+    ];
+
+    final entries = <Widget>[];
+    for (final key in priorityKeys) {
+      final value = _configValues[key];
+      if (value != null) {
+        entries.add(
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 3),
+            child: Row(
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: Text(
+                    key,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  flex: 2,
+                  child: Text(
+                    value,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                      fontWeight: FontWeight.w600,
+                      color: colorScheme.primary,
+                    ),
+                    textAlign: TextAlign.right,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                GestureDetector(
+                  onTap: () => _editConfigValue(context, key, value),
+                  child: Icon(
+                    Icons.edit_square,
+                    size: 14,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: entries,
+    );
+  }
+
+  Future<void> _editConfigValue(
+    BuildContext context,
+    String key,
+    String currentValue,
+  ) async {
+    final controller = TextEditingController(text: currentValue);
+    final newValue = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          key,
+          style: const TextStyle(fontSize: 14, fontFamily: 'monospace'),
+        ),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            labelText: 'Value',
+            border: OutlineInputBorder(),
+          ),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+
+    if (newValue != null && newValue != currentValue) {
+      if (!context.mounted) return;
+      try {
+        final taskState = context.read<TaskState>();
+        if (taskState.taskManager == null) return;
+        final service = TaskrcConfigService(taskState.taskManager!);
+        await service.setConfigValue(key, newValue);
+        if (!context.mounted) return;
+        setState(() => _configValues[key] = newValue);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Updated $key'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      } catch (e) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to update: $e'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
+  void _showConfigEditor(BuildContext context) {
+    final configList = _configValues.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            return DraggableScrollableSheet(
+              initialChildSize: 0.7,
+              minChildSize: 0.4,
+              maxChildSize: 0.9,
+              expand: false,
+              builder: (context, scrollController) {
+                return Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Config Values',
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Tap a value to edit',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child: ListView.separated(
+                          controller: scrollController,
+                          itemCount: configList.length,
+                          separatorBuilder: (_, _) => const Divider(height: 1),
+                          itemBuilder: (context, index) {
+                            final entry = configList[index];
+                            return ListTile(
+                              dense: true,
+                              title: Text(
+                                entry.key,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontFamily: 'monospace',
+                                ),
+                              ),
+                              subtitle: Text(
+                                entry.value,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontFamily: 'monospace',
+                                  color: Theme.of(context).colorScheme.primary,
+                                ),
+                              ),
+                              trailing: const Icon(
+                                Icons.edit_outlined,
+                                size: 16,
+                              ),
+                              onTap: () {
+                                Navigator.pop(ctx);
+                                _editConfigValue(
+                                  this.context,
+                                  entry.key,
+                                  entry.value,
+                                );
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _showRawConfigEditor(
+    BuildContext context,
+    Profile profile,
+  ) async {
+    final rawContent = await TaskrcConfigService.readRawContent(profile);
+    if (!context.mounted) return;
+    final controller = TextEditingController(text: rawContent ?? '');
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.code, size: 20),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text('taskrc', style: TextStyle(fontSize: 16)),
+            ),
+            IconButton(
+              icon: const Icon(Icons.copy, size: 18),
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: controller.text));
+                ScaffoldMessenger.of(
+                  ctx,
+                ).showSnackBar(const SnackBar(content: Text('Copied')));
+              },
+            ),
+          ],
+        ),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: MediaQuery.of(context).size.height * 0.5,
+          child: TextField(
+            controller: controller,
+            maxLines: null,
+            expands: true,
+            textAlignVertical: TextAlignVertical.top,
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+            decoration: const InputDecoration(
+              border: OutlineInputBorder(),
+              contentPadding: EdgeInsets.all(12),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+
+    if (result != null && result != (rawContent ?? '')) {
+      if (!context.mounted) return;
+      final taskState = context.read<TaskState>();
+      final tm = taskState.taskManager;
+      final issues = tm == null
+          ? <ConfigIssue>[]
+          : await TaskrcConfigService(tm).validateTaskrc(result);
+      if (!context.mounted) return;
+      if (issues.isNotEmpty) {
+        final proceed = await _showValidationWarning(context, issues);
+        if (!proceed || !context.mounted) return;
+      }
+
+      final ok = await TaskrcConfigService.writeRawContent(profile, result);
+      if (!context.mounted) return;
+      if (ok) {
+        try {
+          final taskState = context.read<TaskState>();
+          await taskState.loadProfile(profile, forceReload: true);
+          await _loadConfig(profile);
+        } catch (_) {}
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Config saved.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Failed to write config')));
+      }
+    }
+  }
+
+  Future<bool> _showValidationWarning(
+    BuildContext context,
+    List<ConfigIssue> issues,
+  ) async {
+    final colorScheme = Theme.of(context).colorScheme;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(
+              Icons.warning_amber_rounded,
+              color: Colors.orange.shade700,
+              size: 22,
+            ),
+            const SizedBox(width: 8),
+            const Text('Config Issues', style: TextStyle(fontSize: 16)),
+          ],
+        ),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 320),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${issues.length} issue${issues.length == 1 ? '' : 's'} found:',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                for (final issue in issues)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'L${issue.line}:',
+                          style: TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 12,
+                            color: colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            issue.message,
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                const SizedBox(height: 8),
+                Text(
+                  'These lines will be ignored. Save anyway?',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: colorScheme.onSurfaceVariant,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Save Anyway'),
+          ),
+        ],
+      ),
+    );
+    return confirmed ?? false;
   }
 
   Widget _buildSectionHeader(BuildContext context, String title) {

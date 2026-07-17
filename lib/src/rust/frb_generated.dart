@@ -64,7 +64,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -1253240180;
+  int get rustContentHash => -1707575179;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -119,6 +119,20 @@ abstract class RustLibApi extends BaseApi {
     required bool includeDeleted,
   });
 
+  Future<List<UdaPair>> crateApiTaskManagerGetAllConfig({
+    required TaskManager that,
+  });
+
+  Future<String?> crateApiTaskManagerGetConfigValue({
+    required TaskManager that,
+    required String key,
+  });
+
+  Future<List<ConfigIssue>> crateApiTaskManagerValidateTaskrc({
+    required TaskManager that,
+    required String content,
+  });
+
   Future<TaskView> crateApiTaskManagerGetTask({
     required TaskManager that,
     required String uuidStr,
@@ -140,6 +154,12 @@ abstract class RustLibApi extends BaseApi {
   });
 
   TaskManager crateApiTaskManagerNew();
+
+  Future<void> crateApiTaskManagerSetConfigValue({
+    required TaskManager that,
+    required String key,
+    required String value,
+  });
 
   Future<void> crateApiTaskManagerSetRecurrenceLimit({
     required TaskManager that,
@@ -528,6 +548,118 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<List<UdaPair>> crateApiTaskManagerGetAllConfig({
+    required TaskManager that,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTaskManager(
+            that,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 10,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_uda_pair,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiTaskManagerGetAllConfigConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiTaskManagerGetAllConfigConstMeta =>
+      const TaskConstMeta(
+        debugName: "TaskManager_get_all_config",
+        argNames: ["that"],
+      );
+
+  @override
+  Future<String?> crateApiTaskManagerGetConfigValue({
+    required TaskManager that,
+    required String key,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTaskManager(
+            that,
+            serializer,
+          );
+          sse_encode_String(key, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 11,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_String,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiTaskManagerGetConfigValueConstMeta,
+        argValues: [that, key],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiTaskManagerGetConfigValueConstMeta =>
+      const TaskConstMeta(
+        debugName: "TaskManager_get_config_value",
+        argNames: ["that", "key"],
+      );
+
+  @override
+  Future<List<ConfigIssue>> crateApiTaskManagerValidateTaskrc({
+    required TaskManager that,
+    required String content,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTaskManager(
+            that,
+            serializer,
+          );
+          sse_encode_String(content, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 12,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_config_issue,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiTaskManagerValidateTaskrcConstMeta,
+        argValues: [that, content],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiTaskManagerValidateTaskrcConstMeta =>
+      const TaskConstMeta(
+        debugName: "TaskManager_validate_taskrc",
+        argNames: ["that", "content"],
+      );
+
+  @override
   Future<TaskView> crateApiTaskManagerGetTask({
     required TaskManager that,
     required String uuidStr,
@@ -544,7 +676,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 13,
             port: port_,
           );
         },
@@ -581,7 +713,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 14,
             port: port_,
           );
         },
@@ -619,7 +751,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 15,
             port: port_,
           );
         },
@@ -657,7 +789,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 16,
             port: port_,
           );
         },
@@ -684,7 +816,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 14)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 17)!;
         },
         codec: SseCodec(
           decodeSuccessData:
@@ -700,6 +832,46 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiTaskManagerNewConstMeta =>
       const TaskConstMeta(debugName: "TaskManager_new", argNames: []);
+
+  @override
+  Future<void> crateApiTaskManagerSetConfigValue({
+    required TaskManager that,
+    required String key,
+    required String value,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTaskManager(
+            that,
+            serializer,
+          );
+          sse_encode_String(key, serializer);
+          sse_encode_String(value, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 18,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiTaskManagerSetConfigValueConstMeta,
+        argValues: [that, key, value],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiTaskManagerSetConfigValueConstMeta =>
+      const TaskConstMeta(
+        debugName: "TaskManager_set_config_value",
+        argNames: ["that", "key", "value"],
+      );
 
   @override
   Future<void> crateApiTaskManagerSetRecurrenceLimit({
@@ -718,7 +890,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 19,
             port: port_,
           );
         },
@@ -756,7 +928,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 16,
+            funcId: 20,
             port: port_,
           );
         },
@@ -794,7 +966,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 17,
+            funcId: 21,
             port: port_,
           );
         },
@@ -836,7 +1008,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 18,
+            funcId: 22,
             port: port_,
           );
         },
@@ -869,7 +1041,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 19,
+            funcId: 23,
             port: port_,
           );
         },
@@ -906,7 +1078,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 20,
+            funcId: 24,
             port: port_,
           );
         },
@@ -1440,6 +1612,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<ConfigIssue> sse_decode_list_config_issue(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <ConfigIssue>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_config_issue(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -1607,6 +1793,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_key = sse_decode_String(deserializer);
     var var_value = sse_decode_String(deserializer);
     return UdaPair(key: var_key, value: var_value);
+  }
+
+  @protected
+  ConfigIssue sse_decode_config_issue(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_line = sse_decode_i_32(deserializer);
+    var var_kind = sse_decode_String(deserializer);
+    var var_message = sse_decode_String(deserializer);
+    return ConfigIssue(line: var_line, kind: var_kind, message: var_message);
   }
 
   @protected
@@ -2078,6 +2273,18 @@ class TaskManagerImpl extends RustOpaque implements TaskManager {
         includeDeleted: includeDeleted,
       );
 
+  Future<List<UdaPair>> getAllConfig() =>
+      RustLib.instance.api.crateApiTaskManagerGetAllConfig(that: this);
+
+  Future<String?> getConfigValue({required String key}) => RustLib.instance.api
+      .crateApiTaskManagerGetConfigValue(that: this, key: key);
+
+  Future<List<ConfigIssue>> validateTaskrc({required String content}) =>
+      RustLib.instance.api.crateApiTaskManagerValidateTaskrc(
+        that: this,
+        content: content,
+      );
+
   Future<TaskView> getTask({required String uuidStr}) => RustLib.instance.api
       .crateApiTaskManagerGetTask(that: this, uuidStr: uuidStr);
 
@@ -2093,6 +2300,13 @@ class TaskManagerImpl extends RustOpaque implements TaskManager {
       .instance
       .api
       .crateApiTaskManagerLoadProfile(that: this, directoryPath: directoryPath);
+
+  Future<void> setConfigValue({required String key, required String value}) =>
+      RustLib.instance.api.crateApiTaskManagerSetConfigValue(
+        that: this,
+        key: key,
+        value: value,
+      );
 
   Future<void> setRecurrenceLimit({required BigInt limit}) => RustLib
       .instance

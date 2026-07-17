@@ -1,3 +1,4 @@
+pub mod config;
 pub mod error;
 pub mod manager;
 pub mod models;
@@ -8,6 +9,7 @@ pub mod utils;
 #[cfg(test)]
 mod compat;
 
+pub use config::{ConfigIssue, IssueKind, Taskrc};
 pub use error::{Result, TaskError};
 pub use manager::TaskManager;
 pub use models::{

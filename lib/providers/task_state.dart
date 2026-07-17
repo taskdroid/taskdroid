@@ -77,8 +77,10 @@ class TaskState extends ChangeNotifier {
   Set<String> get allTags => _repo.allTags;
   Set<String> get allProjects => _repo.allProjects;
 
-  Future<void> loadProfile(Profile profile) async {
-    if (_repo.taskManager != null && _currentProfileId == profile.id) {
+  Future<void> loadProfile(Profile profile, {bool forceReload = false}) async {
+    if (!forceReload &&
+        _repo.taskManager != null &&
+        _currentProfileId == profile.id) {
       if (_repo.readyTasks.isEmpty && !_repo.isLoading) {
         await Future.wait([
           refreshPendingTasks(),
@@ -88,7 +90,7 @@ class TaskState extends ChangeNotifier {
       return;
     }
 
-    if (_repo.isLoading && _currentProfileId == profile.id) {
+    if (!forceReload && _repo.isLoading && _currentProfileId == profile.id) {
       return;
     }
 
@@ -99,7 +101,7 @@ class TaskState extends ChangeNotifier {
     try {
       final dbDir = await resolveProfileStorageDir(profile);
 
-      await _repo.loadProfile(profile.id, dbDir.path, profile.recurrenceLimit);
+      await _repo.loadProfile(profile.id, dbDir.path, forceReload: forceReload);
 
       await _tabService.loadTabs(profile.id, _filterService);
       await _loadContexts(profile.id);
@@ -278,6 +280,8 @@ class TaskState extends ChangeNotifier {
     if (seriesUuid == null) return 'Task is not part of a recurring series';
     return await updateTask(seriesUuid, params);
   }
+
+  int get recurrenceLimit => _repo.recurrenceLimit;
 
   Future<String?> setRecurrenceLimit(int limit) async {
     final result = await _repo.setRecurrenceLimit(limit);
@@ -573,7 +577,6 @@ class TaskState extends ChangeNotifier {
         profile.serverUrl,
         profile.uuid,
         profile.secret,
-        _repo.recurrenceLimit,
       );
       if (error != null) return error;
 

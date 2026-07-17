@@ -63,22 +63,29 @@ class TaskRepository {
   // --- profile init
   Future<void> loadProfile(
     String profileId,
-    String dbDir,
-    int recurrenceLimit,
-  ) async {
-    if (_taskManager != null && _currentProfileId == profileId) return;
+    String dbDir, {
+    bool forceReload = false,
+  }) async {
+    if (!forceReload &&
+        _taskManager != null &&
+        _currentProfileId == profileId) {
+      return;
+    }
 
     _isLoading = true;
     _error = null;
     _currentProfileId = profileId;
-    _recurrenceLimit = recurrenceLimit < 0 ? 0 : recurrenceLimit;
 
     try {
       _taskManager = TaskManager();
       await _taskManager!.loadProfile(directoryPath: dbDir);
-      await _taskManager!.setRecurrenceLimit(
-        limit: BigInt.from(_recurrenceLimit),
+
+      final configVal = await _taskManager!.getConfigValue(
+        key: 'recurrence.limit',
       );
+      _recurrenceLimit = configVal != null
+          ? (int.tryParse(configVal) ?? 1).clamp(0, 128)
+          : 1;
     } catch (e) {
       _error = 'Unable to load profile database.';
       debugPrint('loadProfile error: $e');
