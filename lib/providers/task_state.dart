@@ -451,6 +451,9 @@ class TaskState extends ChangeNotifier {
     await _tabService.switchToTab(tabId, _filterService);
     _filterService.invalidateCache();
     _scheduleQueryRefresh();
+    if (_currentProfileId != null) {
+      await _tabService.saveTabs(_currentProfileId!);
+    }
     notifyListeners();
   }
 
