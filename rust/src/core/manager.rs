@@ -4,9 +4,10 @@ use super::models::{CreateTaskParams, TaskSnapshot, UpdateTaskParams};
 use super::query::{Pagination, Query, QueryResult, SortField, TaskFilter};
 use super::query_language::matches_query_with_config;
 use super::utils::{
-    parse_date_opt_str_strict, parse_date_opt_strict, parse_iso8601, task_snapshot_from_task,
+    calculate_urgency, calculate_urgency_with_inheritance, parse_date_opt_str_strict,
+    parse_date_opt_strict, parse_iso8601, task_snapshot_from_task_with_urgency,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -235,11 +236,17 @@ impl WorkerState {
             .map_err(|e| TaskError::storage(format!("Failed to fetch tasks: {e}")))?
             .into_iter()
             .collect();
+        let task_map = task_map_from_pairs(&all_tasks);
+        let now = Utc::now();
 
         let mut filtered: Vec<TaskSnapshot> = all_tasks
             .into_iter()
             .filter(|(_, task)| matches_filter(task, &query.filter, &self.config))
-            .map(|(_, task)| task_snapshot_from_task(task, &self.config))
+            .map(|(_, task)| {
+                let urgency =
+                    calculate_urgency_with_inheritance(&task, now, &self.config, &task_map);
+                task_snapshot_from_task_with_urgency(task, urgency)
+            })
             .collect();
 
         sort_snapshots(&mut filtered, query.sort.field, query.sort.descending);
@@ -272,14 +279,33 @@ impl WorkerState {
 
     pub(crate) fn get_task(&mut self, uuid_str: String) -> Result<TaskSnapshot> {
         let uuid = parse_uuid(&uuid_str)?;
+        let inherit = self.config.get_bool("urgency.inherit", false);
         let recurrence_limit = self.recurrence_limit();
         let replica = self.replica_mut()?;
         Self::apply_maintenance(replica, recurrence_limit)?;
-        let task = replica
-            .get_task(uuid)
-            .map_err(|e| TaskError::storage(format!("Failed to fetch task: {e}")))?
+
+        if !inherit {
+            let task = replica
+                .get_task(uuid)
+                .map_err(|e| TaskError::storage(format!("Failed to fetch task: {e}")))?
+                .ok_or_else(|| TaskError::not_found(format!("Task `{uuid_str}` not found")))?;
+            let urgency = calculate_urgency(&task, Utc::now(), &self.config);
+            return Ok(task_snapshot_from_task_with_urgency(task, urgency));
+        }
+
+        let all_tasks: Vec<_> = replica
+            .all_tasks()
+            .map_err(|e| TaskError::storage(format!("Failed to fetch tasks: {e}")))?
+            .into_iter()
+            .collect();
+        let task_map = task_map_from_pairs(&all_tasks);
+        let task = task_map
+            .get(&uuid)
+            .cloned()
             .ok_or_else(|| TaskError::not_found(format!("Task `{uuid_str}` not found")))?;
-        Ok(task_snapshot_from_task(task, &self.config))
+        let urgency =
+            calculate_urgency_with_inheritance(&task, Utc::now(), &self.config, &task_map);
+        Ok(task_snapshot_from_task_with_urgency(task, urgency))
     }
 
     fn count_undo_points(&mut self) -> Result<usize> {
@@ -731,12 +757,21 @@ impl WorkerState {
         let recurrence_limit = self.recurrence_limit();
         let replica = self.replica_mut()?;
         Self::apply_maintenance(replica, recurrence_limit)?;
-        let snapshots = replica
+        let all_tasks: Vec<_> = replica
             .all_tasks()
             .map_err(|e| TaskError::storage(format!("Failed to fetch tasks: {e}")))?
             .into_iter()
+            .collect();
+        let task_map = task_map_from_pairs(&all_tasks);
+        let now = Utc::now();
+        let snapshots = all_tasks
+            .into_iter()
             .filter(|(_, task)| include_deleted || task.get_status() != TcStatus::Deleted)
-            .map(|(_, task)| task_snapshot_from_task(task, &self.config))
+            .map(|(_, task)| {
+                let urgency =
+                    calculate_urgency_with_inheritance(&task, now, &self.config, &task_map);
+                task_snapshot_from_task_with_urgency(task, urgency)
+            })
             .collect::<Vec<_>>();
         serde_json::to_string_pretty(&snapshots)
             .map_err(|e| TaskError::storage(format!("Failed to serialize tasks: {e}")))
@@ -1560,6 +1595,13 @@ fn matches_filter(task: &taskchampion::Task, filter: &TaskFilter, config: &Taskr
         }
     }
     true
+}
+
+fn task_map_from_pairs(tasks: &[(Uuid, taskchampion::Task)]) -> HashMap<Uuid, taskchampion::Task> {
+    tasks
+        .iter()
+        .map(|(uuid, task)| (*uuid, task.clone()))
+        .collect()
 }
 
 fn sort_snapshots(tasks: &mut [TaskSnapshot], field: SortField, descending: bool) {

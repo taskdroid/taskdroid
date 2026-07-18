@@ -13,9 +13,12 @@ use crate::core::config::Taskrc;
 use crate::core::manager::{RecurrenceRule, WorkerState, due_for_index};
 use crate::core::models::{CreateTaskParams, TaskSnapshot, TaskStatus, UdaPair, UpdateTaskParams};
 use crate::core::query_language::{matches_query, task_with};
-use crate::core::utils::{parse_iso8601, task_snapshot_from_task};
+use crate::core::utils::{
+    calculate_urgency, calculate_urgency_with_inheritance, parse_iso8601, task_snapshot_from_task,
+};
+use std::collections::HashMap;
 use taskchampion::{
-    Replica, Status as TcStatus, StorageConfig,
+    Operations, Replica, Status as TcStatus, StorageConfig, Tag, Uuid,
     chrono::{Datelike, Duration, TimeZone, Utc, Weekday},
 };
 
@@ -2790,5 +2793,241 @@ fn test_urgency_comparison() {
     assert!(
         matches_query(&task, "urgency<0"),
         "pending task should have urgency < 0 (test sanity)"
+    );
+}
+
+fn urgency_task(
+    fields: &[(&str, &str)],
+    now: taskchampion::chrono::DateTime<Utc>,
+) -> taskchampion::Task {
+    let mut replica = Replica::new(StorageConfig::InMemory.into_storage().unwrap());
+    let mut ops = Operations::new();
+    let uuid = Uuid::new_v4();
+    let mut task = replica.create_task(uuid, &mut ops).unwrap();
+    task.set_description("compat urgency task".into(), &mut ops)
+        .unwrap();
+    task.set_status(TcStatus::Pending, &mut ops).unwrap();
+    task.set_entry(Some(now), &mut ops).unwrap();
+
+    for (key, value) in fields {
+        match *key {
+            "description" => task.set_description(value.to_string(), &mut ops).unwrap(),
+            "due" => task
+                .set_due(Some(parse_iso8601(value).unwrap()), &mut ops)
+                .unwrap(),
+            "entry" => task
+                .set_entry(Some(parse_iso8601(value).unwrap()), &mut ops)
+                .unwrap(),
+            "priority" => task.set_priority(value.to_string(), &mut ops).unwrap(),
+            "project" => task
+                .set_value("project", Some(value.to_string()), &mut ops)
+                .unwrap(),
+            "tag" => {
+                let tag = value.parse::<Tag>().unwrap();
+                task.add_tag(&tag, &mut ops).unwrap();
+            }
+            key => task
+                .set_user_defined_attribute(key.to_string(), value.to_string(), &mut ops)
+                .unwrap(),
+        }
+    }
+
+    replica.commit_operations(ops).unwrap();
+    replica.get_task(uuid).unwrap().unwrap()
+}
+
+fn tw_urgency_config() -> Taskrc {
+    let mut config = Taskrc::default();
+    for key in [
+        "urgency.user.tag.next.coefficient",
+        "urgency.due.coefficient",
+        "urgency.blocking.coefficient",
+        "urgency.uda.priority.H.coefficient",
+        "urgency.uda.priority.M.coefficient",
+        "urgency.uda.priority.L.coefficient",
+        "urgency.active.coefficient",
+        "urgency.scheduled.coefficient",
+        "urgency.age.coefficient",
+        "urgency.annotations.coefficient",
+        "urgency.tags.coefficient",
+        "urgency.project.coefficient",
+        "urgency.blocked.coefficient",
+        "urgency.waiting.coefficient",
+    ] {
+        config.set(key, "0.0");
+    }
+    config
+}
+
+fn assert_urgency_close(actual: f32, expected: f32) {
+    assert!(
+        (actual - expected).abs() < 0.01,
+        "expected urgency {expected}, got {actual}"
+    );
+}
+
+#[test]
+fn tw_test_urgency_due_ramp() {
+    let now = Utc.with_ymd_and_hms(2026, 7, 19, 12, 0, 0).unwrap();
+    let mut config = tw_urgency_config();
+    config.set("urgency.due.coefficient", "10.0");
+
+    let overdue_by_week = urgency_task(&[("due", &(now - Duration::days(7)).to_rfc3339())], now);
+    assert_urgency_close(calculate_urgency(&overdue_by_week, now, &config), 10.0);
+
+    let due_in_25h = urgency_task(&[("due", &(now + Duration::hours(25)).to_rfc3339())], now);
+    assert_urgency_close(calculate_urgency(&due_in_25h, now, &config), 6.94);
+
+    let due_after_two_weeks =
+        urgency_task(&[("due", &(now + Duration::days(15)).to_rfc3339())], now);
+    assert_urgency_close(calculate_urgency(&due_after_two_weeks, now, &config), 2.0);
+}
+
+#[test]
+fn tw_test_urgency_dynamic_user_coefficients() {
+    let now = Utc.with_ymd_and_hms(2026, 7, 19, 12, 0, 0).unwrap();
+    let mut config = tw_urgency_config();
+    config.set("urgency.user.tag.next.coefficient", "10.0");
+    config.set("urgency.user.tag.testtag.coefficient", "10.0");
+    config.set("urgency.user.project.Example.coefficient", "10.0");
+    config.set("urgency.user.keyword.keyword.coefficient", "10.0");
+
+    let next = urgency_task(&[("tag", "next")], now);
+    assert_urgency_close(calculate_urgency(&next, now, &config), 10.0);
+
+    let tag_urgency = urgency_task(&[("tag", "testtag")], now);
+    assert_urgency_close(calculate_urgency(&tag_urgency, now, &config), 10.0);
+
+    let project = urgency_task(&[("project", "Example.child")], now);
+    assert_urgency_close(calculate_urgency(&project, now, &config), 10.0);
+
+    let keyword = urgency_task(&[("description", "contains keyword here")], now);
+    assert_urgency_close(calculate_urgency(&keyword, now, &config), 10.0);
+}
+
+#[test]
+fn tw_test_urgency_uda_coefficients() {
+    let now = Utc.with_ymd_and_hms(2026, 7, 19, 12, 0, 0).unwrap();
+    let mut config = tw_urgency_config();
+    config.set("urgency.uda.size.coefficient", "2.0");
+    config.set("urgency.uda.size.large.coefficient", "3.0");
+    config.set("urgency.uda.priority.H.coefficient", "10.0");
+
+    let task = urgency_task(&[("size", "large"), ("priority", "H")], now);
+
+    assert_urgency_close(calculate_urgency(&task, now, &config), 15.0);
+}
+
+#[test]
+fn tw_test_urgency_age_max() {
+    let now = Utc.with_ymd_and_hms(2026, 7, 19, 12, 0, 0).unwrap();
+    let mut config = tw_urgency_config();
+    config.set("urgency.age.coefficient", "10.0");
+    config.set("urgency.age.max", "10");
+
+    let half_age = urgency_task(&[("entry", &(now - Duration::days(5)).to_rfc3339())], now);
+    assert_urgency_close(calculate_urgency(&half_age, now, &config), 5.0);
+
+    config.set("urgency.age.max", "0");
+    let no_age_cap = urgency_task(&[("entry", &now.to_rfc3339())], now);
+    assert_urgency_close(calculate_urgency(&no_age_cap, now, &config), 10.0);
+}
+
+#[test]
+fn tw_test_urgency_inherit() {
+    let now = Utc.with_ymd_and_hms(2026, 7, 19, 12, 0, 0).unwrap();
+    let mut replica = Replica::new(StorageConfig::InMemory.into_storage().unwrap());
+    let mut ops = Operations::new();
+    let blocker_uuid = Uuid::new_v4();
+    let blocked_uuid = Uuid::new_v4();
+
+    let mut blocker = replica.create_task(blocker_uuid, &mut ops).unwrap();
+    blocker
+        .set_description("blocker".to_string(), &mut ops)
+        .unwrap();
+    blocker.set_status(TcStatus::Pending, &mut ops).unwrap();
+    blocker.set_entry(Some(now), &mut ops).unwrap();
+
+    let mut blocked = replica.create_task(blocked_uuid, &mut ops).unwrap();
+    blocked
+        .set_description("blocked".to_string(), &mut ops)
+        .unwrap();
+    blocked.set_status(TcStatus::Pending, &mut ops).unwrap();
+    blocked.set_entry(Some(now), &mut ops).unwrap();
+    blocked.set_priority("H".to_string(), &mut ops).unwrap();
+    blocked.add_dependency(blocker_uuid, &mut ops).unwrap();
+
+    replica.commit_operations(ops).unwrap();
+
+    let all_tasks: HashMap<_, _> = replica
+        .all_tasks()
+        .unwrap()
+        .into_iter()
+        .map(|(uuid, task)| (uuid, task))
+        .collect();
+    let blocker = all_tasks.get(&blocker_uuid).unwrap();
+    let mut config = tw_urgency_config();
+    config.set("urgency.uda.priority.H.coefficient", "10.0");
+    config.set("urgency.blocking.coefficient", "0.0");
+    config.set("urgency.inherit", "1");
+
+    assert_urgency_close(
+        calculate_urgency_with_inheritance(blocker, now, &config, &all_tasks),
+        10.01,
+    );
+}
+
+#[test]
+fn tw_test_urgency_inherit_ignores_resolved_dependents() {
+    let now = Utc.with_ymd_and_hms(2026, 7, 19, 12, 0, 0).unwrap();
+    let mut replica = Replica::new(StorageConfig::InMemory.into_storage().unwrap());
+    let mut ops = Operations::new();
+    let blocker_uuid = Uuid::new_v4();
+    let pending_uuid = Uuid::new_v4();
+    let completed_uuid = Uuid::new_v4();
+
+    let mut blocker = replica.create_task(blocker_uuid, &mut ops).unwrap();
+    blocker
+        .set_description("blocker".to_string(), &mut ops)
+        .unwrap();
+    blocker.set_status(TcStatus::Pending, &mut ops).unwrap();
+    blocker.set_entry(Some(now), &mut ops).unwrap();
+
+    let mut pending = replica.create_task(pending_uuid, &mut ops).unwrap();
+    pending
+        .set_description("pending dependent".to_string(), &mut ops)
+        .unwrap();
+    pending.set_status(TcStatus::Pending, &mut ops).unwrap();
+    pending.set_entry(Some(now), &mut ops).unwrap();
+    pending.set_priority("L".to_string(), &mut ops).unwrap();
+    pending.add_dependency(blocker_uuid, &mut ops).unwrap();
+
+    let mut completed = replica.create_task(completed_uuid, &mut ops).unwrap();
+    completed
+        .set_description("completed dependent".to_string(), &mut ops)
+        .unwrap();
+    completed.set_status(TcStatus::Completed, &mut ops).unwrap();
+    completed.set_entry(Some(now), &mut ops).unwrap();
+    completed.set_priority("H".to_string(), &mut ops).unwrap();
+    completed.add_dependency(blocker_uuid, &mut ops).unwrap();
+
+    replica.commit_operations(ops).unwrap();
+
+    let all_tasks: HashMap<_, _> = replica
+        .all_tasks()
+        .unwrap()
+        .into_iter()
+        .map(|(uuid, task)| (uuid, task))
+        .collect();
+    let blocker = all_tasks.get(&blocker_uuid).unwrap();
+    let mut config = tw_urgency_config();
+    config.set("urgency.uda.priority.H.coefficient", "10.0");
+    config.set("urgency.uda.priority.L.coefficient", "1.0");
+    config.set("urgency.blocking.coefficient", "0.0");
+    config.set("urgency.inherit", "1");
+
+    assert_urgency_close(
+        calculate_urgency_with_inheritance(blocker, now, &config, &all_tasks),
+        1.01,
     );
 }

@@ -63,13 +63,9 @@ impl Taskrc {
         find_comment_start(line).map_or(line, |pos| line[..pos].trim_end())
     }
 
-    /// validate raw `taskrc` content and return any issues found
-    /// Checks for:
-    /// - `include` directives (not supported, silently ignored)
-    /// - `$VAR` / `${VAR}` references (not supported, used literally)
-    /// - keys absent from `DEFAULT_CONFIG` (not supported by this app)
-    /// - values that do not match the type implied by their default
-    /// - lines that are neither comments nor `key=value` (silently ignored)
+    /// validate raw `taskrc` content and return any issues found.
+    /// Valid Taskwarrior keys that this app does not consume are accepted so
+    /// existing `taskrc` files do not show misleading warnings
     pub fn validate(content: &str) -> Vec<ConfigIssue> {
         let mut issues = Vec::new();
         for (i, line) in content.lines().enumerate() {
@@ -82,14 +78,18 @@ impl Taskrc {
                 let key = trimmed[..eq_pos].trim();
                 let value = trimmed[eq_pos + 1..].trim();
 
-                if let Some(default_value) = default_value_for_key(key) {
-                    validate_value_kind(
-                        key,
-                        value,
-                        value_kind_from_default(default_value),
-                        i + 1,
-                        &mut issues,
-                    );
+                if let Some(kind) = value_kind_for_key(key) {
+                    validate_value_kind(key, value, kind, i + 1, &mut issues);
+                    if value.contains('$') {
+                        issues.push(ConfigIssue {
+                            line: i + 1,
+                            kind: IssueKind::Warning,
+                            message: format!(
+                                "environment variables (`$VAR`) in config values are not expanded; \
+                                 `{key}` will be used as-is"
+                            ),
+                        });
+                    }
                 } else {
                     issues.push(ConfigIssue {
                         line: i + 1,
@@ -97,14 +97,6 @@ impl Taskrc {
                         message: format!(
                             "unrecognized config key `{key}`; this app will ignore it"
                         ),
-                    });
-                }
-
-                if value.contains('$') {
-                    issues.push(ConfigIssue {
-                        line: i + 1,
-                        kind: IssueKind::Warning,
-                        message: "environment variable references ($VAR, ${VAR}) are not supported; using literal value".to_string(),
                     });
                 }
             } else {
@@ -116,8 +108,9 @@ impl Taskrc {
                     issues.push(ConfigIssue {
                         line: i + 1,
                         kind: IssueKind::Warning,
-                        message: "include directives are not supported; this line will be ignored"
-                            .to_string(),
+                        message:
+                            "`include` directives are not supported; this line will be ignored"
+                                .to_string(),
                     });
                 } else {
                     issues.push(ConfigIssue {
@@ -173,6 +166,18 @@ impl Taskrc {
         let mut pairs: Vec<_> = self
             .values
             .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        pairs.sort_by(|a, b| a.0.cmp(b.0));
+        pairs
+    }
+
+    /// return all key-value pairs whose keys start with `prefix`
+    pub(crate) fn pairs_with_prefix<'a>(&'a self, prefix: &str) -> Vec<(&'a str, &'a str)> {
+        let mut pairs: Vec<_> = self
+            .values
+            .iter()
+            .filter(|(k, _)| k.starts_with(prefix))
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
         pairs.sort_by(|a, b| a.0.cmp(b.0));
@@ -313,6 +318,118 @@ fn default_value_for_key(key: &str) -> Option<&'static str> {
     })
 }
 
+fn value_kind_for_key(key: &str) -> Option<ValueKind> {
+    if let Some(default_value) = default_value_for_key(key) {
+        return Some(value_kind_from_default(default_value));
+    }
+
+    if is_dynamic_urgency_coefficient_key(key) {
+        return Some(ValueKind::Float);
+    }
+
+    if is_known_taskwarrior_key(key) {
+        return Some(ValueKind::Text);
+    }
+
+    None
+}
+
+fn is_known_taskwarrior_key(key: &str) -> bool {
+    const EXACT_KEYS: &[&str] = &[
+        "active.indicator",
+        "annotation.sort",
+        "bulk",
+        "calendar.details",
+        "calendar.holidays",
+        "calendar.legend",
+        "calendar.offset",
+        "calendar.offset.value",
+        "calendar.monthsperline",
+        "calendar.weekrow",
+        "color",
+        "confirmation",
+        "data.location",
+        "dateformat",
+        "debug",
+        "dependency.confirmation",
+        "dependency.indicator",
+        "dependency.reminder",
+        "detection",
+        "gc",
+        "hooks",
+        "journal.info",
+        "locking",
+        "nag",
+        "news.version",
+        "obfuscate",
+        "recurrence",
+        "recurrence.confirmation",
+        "recurrence.indicator",
+        "reserved.lines",
+        "rule.precedence.color",
+        "search.case.sensitive",
+        "shell.prompt",
+        "tag.indicator",
+        "taskd.certificate",
+        "taskd.credentials",
+        "taskd.key",
+        "taskd.server",
+        "taskd.trust",
+        "undo.style",
+        "verbose",
+        "weekstart",
+    ];
+    const PREFIXES: &[&str] = &[
+        "alias.",
+        "color.",
+        "context.",
+        "default.",
+        "description.",
+        "due.",
+        "fontunderline.",
+        "holiday.",
+        "hook.",
+        "hooks.",
+        "journal.",
+        "news.",
+        "regex.",
+        "report.",
+        "uda.",
+    ];
+
+    EXACT_KEYS.contains(&key) || PREFIXES.iter().any(|prefix| key.starts_with(prefix))
+}
+
+fn is_dynamic_urgency_coefficient_key(key: &str) -> bool {
+    (key.starts_with("urgency.user.tag.")
+        && key.ends_with(".coefficient")
+        && key.len() > "urgency.user.tag..coefficient".len())
+        || (key.starts_with("urgency.user.project.")
+            && key.ends_with(".coefficient")
+            && key.len() > "urgency.user.project..coefficient".len())
+        || (key.starts_with("urgency.user.keyword.")
+            && key.ends_with(".coefficient")
+            && key.len() > "urgency.user.keyword..coefficient".len())
+        || is_dynamic_uda_urgency_key(key)
+}
+
+fn is_dynamic_uda_urgency_key(key: &str) -> bool {
+    let Some(inner) = key
+        .strip_prefix("urgency.uda.")
+        .and_then(|s| s.strip_suffix(".coefficient"))
+    else {
+        return false;
+    };
+
+    if inner.is_empty() || inner.starts_with('.') {
+        return false;
+    }
+
+    inner
+        .split_once('.')
+        .map_or(true, |(name, _)| !name.is_empty())
+}
+
 fn value_kind_from_default(value: &str) -> ValueKind {
     if value.parse::<i64>().is_ok() {
         ValueKind::Int
@@ -425,12 +542,12 @@ mod tests {
 
     #[test]
     fn validate_warns_on_unknown_config_key() {
-        let issues = Taskrc::validate("uda.priority.urgency.H=10\n");
+        let issues = Taskrc::validate("not.taskwarrior.key=10\n");
         assert_eq!(issues.len(), 1);
         assert!(
             issues[0]
                 .message
-                .contains("unrecognized config key `uda.priority.urgency.H`")
+                .contains("unrecognized config key `not.taskwarrior.key`")
         );
     }
 
@@ -445,6 +562,45 @@ mod tests {
     fn validate_accepts_all_default_config_keys() {
         let issues = Taskrc::validate(DEFAULT_CONFIG);
         assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn validate_accepts_dynamic_urgency_config_keys() {
+        let issues = Taskrc::validate(
+            "urgency.user.tag.problem.coefficient=4.5\n\
+             urgency.user.project.Home.coefficient=2.9\n\
+             urgency.user.keyword.invoice.coefficient=1.5\n\
+             urgency.uda.size.coefficient=2.8\n\
+             urgency.uda.size.large.coefficient=4.2\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn validate_rejects_non_numeric_dynamic_urgency_coefficients() {
+        let issues = Taskrc::validate("urgency.uda.size.coefficient=large\n");
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].message.contains("expects a numeric value"));
+    }
+
+    #[test]
+    fn validate_accepts_common_taskwarrior_config_families() {
+        let issues = Taskrc::validate(
+            "include ~/.task/theme\n\
+             data.location=$HOME/.task\n\
+             uda.size.type=string\n\
+             uda.size.label=Size\n\
+             report.next.columns=id,description\n\
+             color.tag.next=green\n\
+             context.work=+work\n\
+             default.project=Inbox\n\
+             alias.in=list +in\n\
+             regex.foo=bar\n\
+             hook.foo=on\n",
+        );
+        assert_eq!(issues.len(), 2);
+        assert!(issues[0].message.contains("include"));
+        assert!(issues[1].message.contains("environment variables"));
     }
 
     #[test]
@@ -486,6 +642,8 @@ urgency.user.tag.next.coefficient=15.0
 urgency.uda.priority.H.coefficient=6.0
 urgency.uda.priority.M.coefficient=3.9
 urgency.uda.priority.L.coefficient=1.8
+urgency.age.max=365
+urgency.inherit=0
 due=7
 recurrence.limit=1
 "##;
