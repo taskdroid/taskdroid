@@ -1,4 +1,5 @@
 # Miscellaneous
+lib/version.dart
 .env
 docs/
 *.apk
