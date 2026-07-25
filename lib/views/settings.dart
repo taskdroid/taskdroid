@@ -302,9 +302,9 @@ class _SettingsPageState extends State<SettingsPage> {
     try {
       await Clipboard.setData(ClipboardData(text: path));
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Storage path copied')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Storage path copied')));
     } catch (_) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -320,6 +320,7 @@ class _SettingsPageState extends State<SettingsPage> {
     if (!context.mounted) return;
 
     final currentPath = await getGlobalStoragePath();
+    if (!context.mounted) return;
 
     final result = await showModalBottomSheet<String>(
       context: context,
@@ -349,8 +350,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                trailing:
-                    isSelected ? const Icon(Icons.check_rounded) : null,
+                trailing: isSelected ? const Icon(Icons.check_rounded) : null,
                 onTap: () => Navigator.pop(ctx, location.path),
               );
             },
@@ -379,6 +379,7 @@ class _SettingsPageState extends State<SettingsPage> {
       return;
     }
 
+    if (!context.mounted) return;
     await _applyStoragePath(context, normalizedPath, profileState);
   }
 
@@ -405,7 +406,8 @@ class _SettingsPageState extends State<SettingsPage> {
       if (!context.mounted) return;
 
       final granted = await StoragePermissions.requestPermission();
-      if (!granted || !context.mounted) {
+      if (!granted) {
+        if (!context.mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
@@ -415,6 +417,7 @@ class _SettingsPageState extends State<SettingsPage> {
         );
         return;
       }
+      if (!context.mounted) return;
 
       if (!await _ensureWritable(dir)) {
         if (!context.mounted) return;
@@ -425,21 +428,29 @@ class _SettingsPageState extends State<SettingsPage> {
       }
     }
 
+    if (!context.mounted) return;
     await _applyStoragePath(context, realPath, profileState);
   }
 
-  Future<void> _deleteOldProfileDirs(String oldPath, List<Profile> profiles) async {
+  Future<void> _deleteOldProfileDirs(
+    String oldPath,
+    List<Profile> profiles,
+  ) async {
     for (final profile in profiles) {
       final dirName = sanitizeProfileName(profile.name);
       final dir = Directory('$oldPath/$dirName/');
       if (await dir.exists()) {
-        try { await dir.delete(recursive: true); } catch (e) {
+        try {
+          await dir.delete(recursive: true);
+        } catch (e) {
           debugPrint('Failed to delete old dir for ${profile.id}: $e');
         }
       }
       final legacyDir = Directory('$oldPath/${profile.id}/');
       if (await legacyDir.exists()) {
-        try { await legacyDir.delete(recursive: true); } catch (e) {
+        try {
+          await legacyDir.delete(recursive: true);
+        } catch (e) {
           debugPrint('Failed to delete legacy dir for ${profile.id}: $e');
         }
       }
@@ -454,6 +465,7 @@ class _SettingsPageState extends State<SettingsPage> {
     final oldPath = await getGlobalStoragePath();
     final newPath = path ?? await getDefaultStoragePath();
     if (oldPath == newPath) return;
+    if (!context.mounted) return;
 
     bool copyData = true;
     bool deleteOld = false;
@@ -489,9 +501,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       title: const Text(
                         'Delete profile folders from old location',
                       ),
-                      subtitle: const Text(
-                        'Only available when copying data',
-                      ),
+                      subtitle: const Text('Only available when copying data'),
                       value: deleteOld,
                       contentPadding: EdgeInsets.zero,
                       onChanged: copyData
@@ -502,8 +512,8 @@ class _SettingsPageState extends State<SettingsPage> {
                     Text(
                       'The app will restart for changes to take effect.',
                       style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
-                            color: Theme.of(ctx).colorScheme.onSurfaceVariant,
-                          ),
+                        color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ),
@@ -555,9 +565,9 @@ class _SettingsPageState extends State<SettingsPage> {
     await setGlobalStoragePath(path);
     if (!context.mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Restarting…')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Restarting…')));
     await Future.delayed(const Duration(milliseconds: 800));
     await SystemNavigator.pop();
   }
@@ -651,42 +661,14 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<void> _editRecurrenceLimit(BuildContext context) async {
     final current = context.read<TaskState>().recurrenceLimit;
-    final controller = TextEditingController(text: current.toString());
     final result = await showDialog<int>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Recurring instances ahead'),
-        content: TextField(
-          controller: controller,
-          keyboardType: TextInputType.number,
-          decoration: const InputDecoration(
-            labelText: 'Limit (0-128, 0 = Off)',
-            border: OutlineInputBorder(),
-            isDense: true,
-          ),
-          autofocus: true,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final parsed = int.tryParse(controller.text);
-              if (parsed == null || parsed < 0 || parsed > 128) return;
-              Navigator.pop(ctx, parsed);
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
+      builder: (_) => _RecurrenceLimitDialog(currentValue: current),
     );
-    controller.dispose();
     if (result == null || !context.mounted) return;
-    await context
-        .read<ProfileState>()
-        .setRecurrenceLimitForCurrentProfile(result);
+    await context.read<ProfileState>().setRecurrenceLimitForCurrentProfile(
+      result,
+    );
     if (!context.mounted) return;
     final error = await context.read<TaskState>().setRecurrenceLimit(result);
     if (!context.mounted) return;
@@ -699,6 +681,62 @@ class _SettingsPageState extends State<SettingsPage> {
                   : 'Recurring instance limit set to $result'),
         ),
       ),
+    );
+  }
+}
+
+class _RecurrenceLimitDialog extends StatefulWidget {
+  const _RecurrenceLimitDialog({required this.currentValue});
+
+  final int currentValue;
+
+  @override
+  State<_RecurrenceLimitDialog> createState() => _RecurrenceLimitDialogState();
+}
+
+class _RecurrenceLimitDialogState extends State<_RecurrenceLimitDialog> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.currentValue.toString());
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Recurring instances ahead'),
+      content: TextField(
+        controller: _controller,
+        keyboardType: TextInputType.number,
+        decoration: const InputDecoration(
+          labelText: 'Limit (0-128, 0 = Off)',
+          border: OutlineInputBorder(),
+          isDense: true,
+        ),
+        autofocus: true,
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final parsed = int.tryParse(_controller.text);
+            if (parsed == null || parsed < 0 || parsed > 128) return;
+            Navigator.pop(context, parsed);
+          },
+          child: const Text('Save'),
+        ),
+      ],
     );
   }
 }

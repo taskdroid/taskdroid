@@ -8,6 +8,8 @@ class FilterTabsRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final dialogContext = context;
+
     // rebuild when filterTabs or currentTab changes
     return Selector<TaskState, (List<FilterTab>, String?)>(
       selector: (_, state) => (state.filterTabs, state.currentTab?.id),
@@ -46,6 +48,7 @@ class FilterTabsRow extends StatelessWidget {
                 tab: tab,
                 isActive: isActive,
                 taskState: taskState,
+                dialogContext: dialogContext,
               );
             },
           ),
@@ -61,11 +64,13 @@ class _TabChip extends StatelessWidget {
     required this.tab,
     required this.isActive,
     required this.taskState,
+    required this.dialogContext,
   });
 
   final FilterTab tab;
   final bool isActive;
   final TaskState taskState;
+  final BuildContext dialogContext;
 
   @override
   Widget build(BuildContext context) {
@@ -117,17 +122,17 @@ class _TabChip extends StatelessWidget {
     );
   }
 
-  void _showTabMenu(BuildContext context) {
-    final parentContext = context;
-    final theme = Theme.of(context);
+  Future<void> _showTabMenu(BuildContext context) async {
     final canDelete = taskState.filterTabs.length > 1;
 
-    showModalBottomSheet<void>(
+    final action = await showModalBottomSheet<_TabMenuAction>(
       context: context,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (context) {
+        final theme = Theme.of(context);
+
         return SafeArea(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -168,10 +173,7 @@ class _TabChip extends StatelessWidget {
                   'Rename tab',
                   style: TextStyle(fontWeight: FontWeight.w500),
                 ),
-                onTap: () {
-                  Navigator.pop(context);
-                  _showRenameDialog(parentContext);
-                },
+                onTap: () => Navigator.pop(context, _TabMenuAction.rename),
               ),
               ListTile(
                 contentPadding: const EdgeInsets.symmetric(horizontal: 24),
@@ -187,12 +189,7 @@ class _TabChip extends StatelessWidget {
                   ),
                 ),
                 onTap: canDelete
-                    ? () {
-                        Navigator.pop(context);
-                        WidgetsBinding.instance.addPostFrameCallback((_) async {
-                          await taskState.deleteFilterTab(tab.id);
-                        });
-                      }
+                    ? () => Navigator.pop(context, _TabMenuAction.delete)
                     : null,
               ),
               const SizedBox(height: 16),
@@ -201,62 +198,101 @@ class _TabChip extends StatelessWidget {
         );
       },
     );
+
+    if (!dialogContext.mounted || action == null) return;
+
+    switch (action) {
+      case _TabMenuAction.rename:
+        await _showRenameDialog(dialogContext);
+        break;
+      case _TabMenuAction.delete:
+        await taskState.deleteFilterTab(tab.id);
+        break;
+    }
   }
 
   Future<void> _showRenameDialog(BuildContext context) async {
-    final controller = TextEditingController(text: tab.name);
-    final theme = Theme.of(context);
-
-    controller.selection = TextSelection(
-      baseOffset: 0,
-      extentOffset: controller.text.length,
-    );
-
     final newName = await showDialog<String>(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text(
-            'Rename tab',
-            style: TextStyle(fontWeight: FontWeight.bold),
-          ),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            decoration: const InputDecoration(
-              hintText: 'Tab name',
-              prefixIcon: Icon(Icons.edit_outlined),
-            ),
-            textCapitalization: TextCapitalization.words,
-            onSubmitted: (val) {
-              Navigator.pop(context, val.trim().isEmpty ? null : val.trim());
-            },
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () {
-                final name = controller.text.trim();
-                Navigator.pop(context, name.isEmpty ? null : name);
-              },
-              style: FilledButton.styleFrom(
-                backgroundColor: theme.colorScheme.primary,
-              ),
-              child: const Text('Save'),
-            ),
-          ],
-        );
-      },
+      builder: (_) => _RenameTabDialog(initialName: tab.name),
     );
-    controller.dispose();
+
+    if (!context.mounted) return;
+
     if (newName != null && newName != tab.name) {
-      WidgetsBinding.instance.addPostFrameCallback((_) async {
-        await taskState.renameFilterTab(tab.id, newName);
-      });
+      await taskState.renameFilterTab(tab.id, newName);
     }
+  }
+}
+
+enum _TabMenuAction { rename, delete }
+
+class _RenameTabDialog extends StatefulWidget {
+  const _RenameTabDialog({required this.initialName});
+
+  final String initialName;
+
+  @override
+  State<_RenameTabDialog> createState() => _RenameTabDialogState();
+}
+
+class _RenameTabDialogState extends State<_RenameTabDialog> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialName);
+    _controller.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: _controller.text.length,
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return AlertDialog(
+      title: const Text(
+        'Rename tab',
+        style: TextStyle(fontWeight: FontWeight.bold),
+      ),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        decoration: const InputDecoration(
+          hintText: 'Tab name',
+          prefixIcon: Icon(Icons.edit_outlined),
+        ),
+        textCapitalization: TextCapitalization.words,
+        onSubmitted: (val) {
+          Navigator.pop(context, val.trim().isEmpty ? null : val.trim());
+        },
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final name = _controller.text.trim();
+            Navigator.pop(context, name.isEmpty ? null : name);
+          },
+          style: FilledButton.styleFrom(
+            backgroundColor: theme.colorScheme.primary,
+          ),
+          child: const Text('Save'),
+        ),
+      ],
+    );
   }
 }
 
@@ -290,53 +326,76 @@ class _AddTabChip extends StatelessWidget {
   }
 
   Future<void> _showAddDialog(BuildContext context) async {
-    final controller = TextEditingController();
-    final theme = Theme.of(context);
-
     final name = await showDialog<String>(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text(
-            'Create Filter Tab',
-            style: TextStyle(fontWeight: FontWeight.bold),
-          ),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            decoration: const InputDecoration(
-              hintText: 'e.g. Work, Errands...',
-              prefixIcon: Icon(Icons.tab_unselected),
-            ),
-            textCapitalization: TextCapitalization.words,
-            onSubmitted: (val) {
-              Navigator.pop(context, val.trim().isEmpty ? null : val.trim());
-            },
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () {
-                final value = controller.text.trim();
-                Navigator.pop(context, value.isEmpty ? null : value);
-              },
-              style: FilledButton.styleFrom(
-                backgroundColor: theme.colorScheme.primary,
-              ),
-              child: const Text('Create'),
-            ),
-          ],
-        );
-      },
+      builder: (_) => const _AddTabDialog(),
     );
-
-    controller.dispose();
 
     if (name != null && name.isNotEmpty) {
       onNewTabCreated(name);
     }
+  }
+}
+
+class _AddTabDialog extends StatefulWidget {
+  const _AddTabDialog();
+
+  @override
+  State<_AddTabDialog> createState() => _AddTabDialogState();
+}
+
+class _AddTabDialogState extends State<_AddTabDialog> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return AlertDialog(
+      title: const Text(
+        'Create Filter Tab',
+        style: TextStyle(fontWeight: FontWeight.bold),
+      ),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        decoration: const InputDecoration(
+          hintText: 'e.g. Work, Errands...',
+          prefixIcon: Icon(Icons.tab_unselected),
+        ),
+        textCapitalization: TextCapitalization.words,
+        onSubmitted: (val) {
+          Navigator.pop(context, val.trim().isEmpty ? null : val.trim());
+        },
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final value = _controller.text.trim();
+            Navigator.pop(context, value.isEmpty ? null : value);
+          },
+          style: FilledButton.styleFrom(
+            backgroundColor: theme.colorScheme.primary,
+          ),
+          child: const Text('Create'),
+        ),
+      ],
+    );
   }
 }

@@ -353,8 +353,9 @@ class _CredentialsPageState extends State<CredentialsPage> {
                             hintText: 'e.g., Work, Personal',
                           ),
                           validator: (v) {
-                            if (v == null || v.trim().isEmpty)
+                            if (v == null || v.trim().isEmpty) {
                               return 'Required';
+                            }
                             final conflict = _validateProfileName(
                               context.read<ProfileState>(),
                             );
@@ -682,35 +683,11 @@ class _CredentialsPageState extends State<CredentialsPage> {
     String key,
     String currentValue,
   ) async {
-    final controller = TextEditingController(text: currentValue);
     final newValue = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(
-          key,
-          style: const TextStyle(fontSize: 14, fontFamily: 'monospace'),
-        ),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(
-            labelText: 'Value',
-            border: OutlineInputBorder(),
-          ),
-          autofocus: true,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, controller.text),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
+      builder: (_) =>
+          _ConfigValueDialog(configKey: key, currentValue: currentValue),
     );
-    controller.dispose();
 
     if (newValue != null && newValue != currentValue) {
       if (!context.mounted) return;
@@ -739,11 +716,11 @@ class _CredentialsPageState extends State<CredentialsPage> {
     }
   }
 
-  void _showConfigEditor(BuildContext context) {
+  Future<void> _showConfigEditor(BuildContext context) async {
     final configList = _configValues.entries.toList()
       ..sort((a, b) => a.key.compareTo(b.key));
 
-    showModalBottomSheet(
+    final selected = await showModalBottomSheet<MapEntry<String, String>>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -803,14 +780,10 @@ class _CredentialsPageState extends State<CredentialsPage> {
                                 Icons.edit_outlined,
                                 size: 16,
                               ),
-                              onTap: () {
-                                Navigator.pop(ctx);
-                                _editConfigValue(
-                                  this.context,
-                                  entry.key,
-                                  entry.value,
-                                );
-                              },
+                              onTap: () => Navigator.pop(
+                                ctx,
+                                MapEntry(entry.key, entry.value),
+                              ),
                             );
                           },
                         ),
@@ -824,6 +797,9 @@ class _CredentialsPageState extends State<CredentialsPage> {
         );
       },
     );
+
+    if (selected == null || !context.mounted) return;
+    _editConfigValue(context, selected.key, selected.value);
   }
 
   Future<void> _showRawConfigEditor(
@@ -832,56 +808,10 @@ class _CredentialsPageState extends State<CredentialsPage> {
   ) async {
     final rawContent = await TaskrcConfigService.readRawContent(profile);
     if (!context.mounted) return;
-    final controller = TextEditingController(text: rawContent ?? '');
     final result = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Row(
-          children: [
-            const Icon(Icons.code, size: 20),
-            const SizedBox(width: 8),
-            const Expanded(
-              child: Text('taskrc', style: TextStyle(fontSize: 16)),
-            ),
-            IconButton(
-              icon: const Icon(Icons.copy, size: 18),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: controller.text));
-                ScaffoldMessenger.of(
-                  ctx,
-                ).showSnackBar(const SnackBar(content: Text('Copied')));
-              },
-            ),
-          ],
-        ),
-        content: SizedBox(
-          width: double.maxFinite,
-          height: MediaQuery.of(context).size.height * 0.5,
-          child: TextField(
-            controller: controller,
-            maxLines: null,
-            expands: true,
-            textAlignVertical: TextAlignVertical.top,
-            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-            decoration: const InputDecoration(
-              border: OutlineInputBorder(),
-              contentPadding: EdgeInsets.all(12),
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, controller.text),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
+      builder: (_) => _RawConfigEditorDialog(initialContent: rawContent ?? ''),
     );
-    controller.dispose();
 
     if (result != null && result != (rawContent ?? '')) {
       if (!context.mounted) return;
@@ -1036,6 +966,135 @@ class _CredentialsPageState extends State<CredentialsPage> {
         ),
       ),
       child: Padding(padding: padding ?? EdgeInsets.zero, child: child),
+    );
+  }
+}
+
+class _ConfigValueDialog extends StatefulWidget {
+  const _ConfigValueDialog({
+    required this.configKey,
+    required this.currentValue,
+  });
+
+  final String configKey;
+  final String currentValue;
+
+  @override
+  State<_ConfigValueDialog> createState() => _ConfigValueDialogState();
+}
+
+class _ConfigValueDialogState extends State<_ConfigValueDialog> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.currentValue);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(
+        widget.configKey,
+        style: const TextStyle(fontSize: 14, fontFamily: 'monospace'),
+      ),
+      content: TextField(
+        controller: _controller,
+        decoration: const InputDecoration(
+          labelText: 'Value',
+          border: OutlineInputBorder(),
+        ),
+        autofocus: true,
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _controller.text),
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+
+class _RawConfigEditorDialog extends StatefulWidget {
+  const _RawConfigEditorDialog({required this.initialContent});
+
+  final String initialContent;
+
+  @override
+  State<_RawConfigEditorDialog> createState() => _RawConfigEditorDialogState();
+}
+
+class _RawConfigEditorDialogState extends State<_RawConfigEditorDialog> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialContent);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Row(
+        children: [
+          const Icon(Icons.code, size: 20),
+          const SizedBox(width: 8),
+          const Expanded(child: Text('taskrc', style: TextStyle(fontSize: 16))),
+          IconButton(
+            icon: const Icon(Icons.copy, size: 18),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: _controller.text));
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(const SnackBar(content: Text('Copied')));
+            },
+          ),
+        ],
+      ),
+      content: SizedBox(
+        width: double.maxFinite,
+        height: MediaQuery.of(context).size.height * 0.5,
+        child: TextField(
+          controller: _controller,
+          maxLines: null,
+          expands: true,
+          textAlignVertical: TextAlignVertical.top,
+          style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+          decoration: const InputDecoration(
+            border: OutlineInputBorder(),
+            contentPadding: EdgeInsets.all(12),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _controller.text),
+          child: const Text('Save'),
+        ),
+      ],
     );
   }
 }

@@ -186,14 +186,15 @@ class AppDrawer extends StatelessWidget {
   }
 
   void _navigate(BuildContext context, String route) {
-    Navigator.pop(context);
+    final navigator = Navigator.of(context);
+    navigator.pop();
 
     if (currentRoute == route) return;
 
     if (route == '/') {
-      Navigator.pushNamedAndRemoveUntil(context, '/', (route) => false);
+      navigator.pushNamedAndRemoveUntil('/', (route) => false);
     } else {
-      Navigator.pushNamed(context, route);
+      navigator.pushNamed(route);
     }
   }
 
@@ -205,14 +206,13 @@ class AppDrawer extends StatelessWidget {
     final profiles = state.profiles;
 
     if (profiles.isEmpty) {
-      // no profiles to show
-      Navigator.pop(context); // close modal
-      Navigator.pop(context); // close drawer
-      Navigator.pushNamed(context, '/credentials');
+      final navigator = Navigator.of(context);
+      navigator.pop(); // close drawer
+      navigator.pushNamed('/credentials');
       return;
     }
 
-    await showModalBottomSheet(
+    final profileId = await showModalBottomSheet<String>(
       context: context,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
@@ -260,25 +260,7 @@ class AppDrawer extends StatelessWidget {
                 trailing: isCurrent
                     ? Icon(Icons.check_circle, color: colorScheme.primary)
                     : null,
-                onTap: () async {
-                  // show loading while switching
-                  Navigator.pop(context); // close modal
-
-                  try {
-                    await state.setCurrentProfile(profile.id);
-                    HapticFeedback.selectionClick();
-                  } catch (e) {
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('Failed to switch profile: $e'),
-                          backgroundColor: colorScheme.error,
-                          behavior: SnackBarBehavior.floating,
-                        ),
-                      );
-                    }
-                  }
-                },
+                onTap: () => Navigator.pop(context, profile.id),
               );
             }),
             const SizedBox(height: 16),
@@ -286,6 +268,22 @@ class AppDrawer extends StatelessWidget {
         ),
       ),
     );
+
+    if (profileId == null || !context.mounted) return;
+
+    try {
+      await state.setCurrentProfile(profileId);
+      HapticFeedback.selectionClick();
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to switch profile: $e'),
+          backgroundColor: colorScheme.error,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 }
 

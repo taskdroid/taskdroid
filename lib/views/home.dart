@@ -559,82 +559,6 @@ class _HomePageState extends State<HomePage>
     );
   }
 
-  Future<void> _showProfileSwitcher(BuildContext context) async {
-    final profileState = context.read<ProfileState>();
-    final theme = Theme.of(context);
-
-    final selected = await showModalBottomSheet<String>(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (context) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 12),
-              Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.onSurfaceVariant.withValues(
-                    alpha: 0.4,
-                  ),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Switch Profile',
-                style: theme.textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Expanded(
-                child: ListView(
-                  shrinkWrap: true,
-                  children: profileState.profiles.map((profile) {
-                    final isSelected =
-                        profileState.currentProfileId == profile.id;
-                    return ListTile(
-                      leading: CircleAvatar(
-                        backgroundColor: isSelected
-                            ? theme.colorScheme.primary
-                            : theme.colorScheme.surfaceContainerHighest,
-                        foregroundColor: isSelected
-                            ? theme.colorScheme.onPrimary
-                            : theme.colorScheme.onSurfaceVariant,
-                        child: Text(profile.name[0].toUpperCase()),
-                      ),
-                      title: Text(
-                        profile.name,
-                        style: TextStyle(
-                          fontWeight: isSelected
-                              ? FontWeight.bold
-                              : FontWeight.normal,
-                        ),
-                      ),
-                      trailing: isSelected
-                          ? Icon(Icons.check, color: theme.colorScheme.primary)
-                          : null,
-                      onTap: () => Navigator.pop(context, profile.id),
-                    );
-                  }).toList(),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-
-    if (selected != null) {
-      await profileState.setCurrentProfile(selected);
-    }
-  }
-
   Future<void> _showTagSelector(
     BuildContext context,
     TaskState taskState,
@@ -1646,10 +1570,13 @@ class _QueueViewAndSearchToggleRow extends StatelessWidget {
 }
 
 class _ContextChip {
-  static void showContextSheet(BuildContext context, TaskState taskState) {
+  static Future<void> showContextSheet(
+    BuildContext context,
+    TaskState taskState,
+  ) async {
     final theme = Theme.of(context);
 
-    showModalBottomSheet<void>(
+    final result = await showModalBottomSheet<_ContextSheetResult>(
       context: context,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
@@ -1740,6 +1667,7 @@ class _ContextChip {
                                         isActive: ctx.id == activeId,
                                         theme: theme,
                                         taskState: taskState,
+                                        sheetContext: context,
                                         setModalState: setModalState,
                                       ),
                                     )
@@ -1768,10 +1696,10 @@ class _ContextChip {
                                     : null,
                               ),
                             ),
-                            onTap: () {
-                              taskState.clearActiveContext();
-                              Navigator.pop(context);
-                            },
+                            onTap: () => Navigator.pop(
+                              context,
+                              const _ContextSheetResult.clear(),
+                            ),
                           ),
                         ],
                       ),
@@ -1783,83 +1711,32 @@ class _ContextChip {
         );
       },
     );
+
+    if (result == null || !context.mounted) return;
+
+    switch (result) {
+      case _SelectContextResult(:final id):
+        taskState.setActiveContext(id);
+      case _ClearContextResult():
+        taskState.clearActiveContext();
+    }
   }
 
   static Future<bool> showDefineDialog(
     BuildContext context,
     TaskState taskState,
   ) async {
-    final nameController = TextEditingController();
-    final queryController = TextEditingController();
-    final writeController = TextEditingController();
-
-    queryController.text = taskState.searchQuery;
-
-    var didDefine = false;
-
-    await showDialog<void>(
+    final result = await showDialog<Map<String, String>>(
       context: context,
-      builder: (ctx) {
-        return AlertDialog(
-          title: const Text(
-            'Define Context',
-            style: TextStyle(fontWeight: FontWeight.bold),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameController,
-                autofocus: true,
-                decoration: const InputDecoration(
-                  hintText: 'e.g. work, home, study...',
-                  prefixIcon: Icon(Icons.label_outline),
-                ),
-                textCapitalization: TextCapitalization.words,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: queryController,
-                decoration: const InputDecoration(
-                  hintText: 'Read filter, e.g. +work or +freelance',
-                  prefixIcon: Icon(Icons.filter_alt_outlined),
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: writeController,
-                decoration: const InputDecoration(
-                  hintText: 'Write default, e.g. +work project:Work',
-                  prefixIcon: Icon(Icons.edit_outlined),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () {
-                final name = nameController.text.trim();
-                final query = queryController.text.trim();
-                final write = writeController.text.trim();
-                if (name.isEmpty) return;
-                taskState.defineContext(name, query, writeQuery: write);
-                didDefine = true;
-                Navigator.pop(ctx);
-              },
-              child: const Text('Save'),
-            ),
-          ],
-        );
-      },
+      builder: (_) => const _DefineContextDialog(),
     );
-    nameController.dispose();
-    queryController.dispose();
-    writeController.dispose();
-    return didDefine;
+    if (result == null || !context.mounted) return false;
+    taskState.defineContext(
+      result['name']!,
+      result['query'] ?? '',
+      writeQuery: result['write'] ?? '',
+    );
+    return true;
   }
 }
 
@@ -1869,6 +1746,7 @@ class _ContextListTile extends StatelessWidget {
     required this.isActive,
     required this.theme,
     required this.taskState,
+    required this.sheetContext,
     required this.setModalState,
   });
 
@@ -1876,6 +1754,7 @@ class _ContextListTile extends StatelessWidget {
   final bool isActive;
   final ThemeData theme;
   final TaskState taskState;
+  final BuildContext sheetContext;
   final void Function(void Function()) setModalState;
 
   @override
@@ -1908,28 +1787,26 @@ class _ContextListTile extends StatelessWidget {
           : null,
       trailing: isActive
           ? TextButton(
-              onPressed: () {
-                taskState.clearActiveContext();
-                Navigator.pop(context);
-              },
+              onPressed: () => Navigator.pop(
+                sheetContext,
+                const _ContextSheetResult.clear(),
+              ),
               child: const Text('Clear'),
             )
           : null,
-      onTap: () {
-        taskState.setActiveContext(taskContext.id);
-        Navigator.pop(context);
-      },
+      onTap: () => Navigator.pop(
+        sheetContext,
+        _ContextSheetResult.select(taskContext.id),
+      ),
       onLongPress: () {
-        _showContextOptions(context);
+        _showContextOptions();
       },
     );
   }
 
-  void _showContextOptions(BuildContext parentContext) {
-    final ts = taskState;
-
-    showModalBottomSheet<void>(
-      context: parentContext,
+  Future<void> _showContextOptions() async {
+    final action = await showModalBottomSheet<_ContextAction>(
+      context: sheetContext,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -1976,10 +1853,7 @@ class _ContextListTile extends StatelessWidget {
                   'Edit',
                   style: TextStyle(fontWeight: FontWeight.w500),
                 ),
-                onTap: () {
-                  Navigator.pop(context);
-                  _showEditDialog(parentContext);
-                },
+                onTap: () => Navigator.pop(context, _ContextAction.edit),
               ),
               ListTile(
                 contentPadding: const EdgeInsets.symmetric(horizontal: 24),
@@ -1994,13 +1868,7 @@ class _ContextListTile extends StatelessWidget {
                     color: theme.colorScheme.error,
                   ),
                 ),
-                onTap: () async {
-                  Navigator.pop(context);
-                  await ts.deleteContext(taskContext.id);
-                  if (parentContext.mounted) {
-                    Navigator.of(parentContext).pop();
-                  }
-                },
+                onTap: () => Navigator.pop(context, _ContextAction.delete),
               ),
               const SizedBox(height: 16),
             ],
@@ -2008,85 +1876,29 @@ class _ContextListTile extends StatelessWidget {
         );
       },
     );
+
+    if (action == null || !sheetContext.mounted) return;
+    switch (action) {
+      case _ContextAction.edit:
+        await _showEditDialog(sheetContext);
+      case _ContextAction.delete:
+        await taskState.deleteContext(taskContext.id);
+        if (sheetContext.mounted) {
+          Navigator.of(sheetContext).pop();
+        }
+    }
   }
 
   Future<void> _showEditDialog(BuildContext parentContext) async {
-    final nameController = TextEditingController(text: taskContext.name);
-    final queryController = TextEditingController(
-      text: taskContext.searchQuery,
-    );
-    final writeController = TextEditingController(text: taskContext.writeQuery);
-
-    nameController.selection = TextSelection(
-      baseOffset: 0,
-      extentOffset: nameController.text.length,
-    );
-
     final result = await showDialog<Map<String, String>>(
       context: parentContext,
-      builder: (ctx) {
-        return AlertDialog(
-          title: const Text(
-            'Edit context',
-            style: TextStyle(fontWeight: FontWeight.bold),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameController,
-                autofocus: true,
-                decoration: const InputDecoration(
-                  hintText: 'Context name',
-                  prefixIcon: Icon(Icons.label_outline),
-                ),
-                textCapitalization: TextCapitalization.words,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: queryController,
-                decoration: const InputDecoration(
-                  hintText: 'Read filter, e.g. +work or +freelance',
-                  prefixIcon: Icon(Icons.filter_alt_outlined),
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: writeController,
-                decoration: const InputDecoration(
-                  hintText: 'Write default, e.g. +work project:Work',
-                  prefixIcon: Icon(Icons.edit_outlined),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () {
-                final name = nameController.text.trim();
-                final query = queryController.text.trim();
-                final write = writeController.text.trim();
-                if (name.isEmpty) return;
-                Navigator.pop(ctx, {
-                  'name': name,
-                  'query': query,
-                  'write': write,
-                });
-              },
-              child: const Text('Save'),
-            ),
-          ],
-        );
-      },
+      builder: (_) => _EditContextDialog(
+        name: taskContext.name,
+        query: taskContext.searchQuery,
+        write: taskContext.writeQuery,
+      ),
     );
-    nameController.dispose();
-    queryController.dispose();
-    writeController.dispose();
-    if (result != null) {
+    if (result != null && parentContext.mounted) {
       taskState.updateContext(
         taskContext.id,
         result['name'] ?? taskContext.name,
@@ -2178,6 +1990,216 @@ class _InlineMessageState extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+enum _ContextAction { edit, delete }
+
+sealed class _ContextSheetResult {
+  const _ContextSheetResult();
+
+  const factory _ContextSheetResult.select(String id) = _SelectContextResult;
+
+  const factory _ContextSheetResult.clear() = _ClearContextResult;
+}
+
+class _SelectContextResult extends _ContextSheetResult {
+  const _SelectContextResult(this.id);
+
+  final String id;
+}
+
+class _ClearContextResult extends _ContextSheetResult {
+  const _ClearContextResult();
+}
+
+class _DefineContextDialog extends StatefulWidget {
+  const _DefineContextDialog();
+
+  @override
+  State<_DefineContextDialog> createState() => _DefineContextDialogState();
+}
+
+class _DefineContextDialogState extends State<_DefineContextDialog> {
+  late final TextEditingController _nameController;
+  late final TextEditingController _queryController;
+  late final TextEditingController _writeController;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController = TextEditingController();
+    _queryController = TextEditingController();
+    _writeController = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _queryController.dispose();
+    _writeController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text(
+        'Define Context',
+        style: TextStyle(fontWeight: FontWeight.bold),
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _nameController,
+            autofocus: true,
+            decoration: const InputDecoration(
+              hintText: 'e.g. work, home, study...',
+              prefixIcon: Icon(Icons.label_outline),
+            ),
+            textCapitalization: TextCapitalization.words,
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _queryController,
+            decoration: const InputDecoration(
+              hintText: 'Read filter, e.g. +work or +freelance',
+              prefixIcon: Icon(Icons.filter_alt_outlined),
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _writeController,
+            decoration: const InputDecoration(
+              hintText: 'Write default, e.g. +work project:Work',
+              prefixIcon: Icon(Icons.edit_outlined),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final name = _nameController.text.trim();
+            final query = _queryController.text.trim();
+            final write = _writeController.text.trim();
+            if (name.isEmpty) return;
+            Navigator.pop(context, {
+              'name': name,
+              'query': query,
+              'write': write,
+            });
+          },
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+
+class _EditContextDialog extends StatefulWidget {
+  const _EditContextDialog({
+    required this.name,
+    required this.query,
+    required this.write,
+  });
+
+  final String name;
+  final String query;
+  final String write;
+
+  @override
+  State<_EditContextDialog> createState() => _EditContextDialogState();
+}
+
+class _EditContextDialogState extends State<_EditContextDialog> {
+  late final TextEditingController _nameController;
+  late final TextEditingController _queryController;
+  late final TextEditingController _writeController;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController = TextEditingController(text: widget.name);
+    _queryController = TextEditingController(text: widget.query);
+    _writeController = TextEditingController(text: widget.write);
+    _nameController.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: _nameController.text.length,
+    );
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _queryController.dispose();
+    _writeController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text(
+        'Edit context',
+        style: TextStyle(fontWeight: FontWeight.bold),
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _nameController,
+            autofocus: true,
+            decoration: const InputDecoration(
+              hintText: 'Context name',
+              prefixIcon: Icon(Icons.label_outline),
+            ),
+            textCapitalization: TextCapitalization.words,
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _queryController,
+            decoration: const InputDecoration(
+              hintText: 'Read filter, e.g. +work or +freelance',
+              prefixIcon: Icon(Icons.filter_alt_outlined),
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _writeController,
+            decoration: const InputDecoration(
+              hintText: 'Write default, e.g. +work project:Work',
+              prefixIcon: Icon(Icons.edit_outlined),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final name = _nameController.text.trim();
+            final query = _queryController.text.trim();
+            final write = _writeController.text.trim();
+            if (name.isEmpty) return;
+            Navigator.pop(context, {
+              'name': name,
+              'query': query,
+              'write': write,
+            });
+          },
+          child: const Text('Save'),
+        ),
+      ],
     );
   }
 }

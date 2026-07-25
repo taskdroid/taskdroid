@@ -86,6 +86,58 @@ class TaskDetailPage extends StatelessWidget {
   }
 }
 
+class _AddNoteDialog extends StatefulWidget {
+  const _AddNoteDialog();
+
+  @override
+  State<_AddNoteDialog> createState() => _AddNoteDialogState();
+}
+
+class _AddNoteDialogState extends State<_AddNoteDialog> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Add Note'),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        decoration: InputDecoration(
+          hintText: 'Enter your note...',
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+        maxLines: 3,
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final text = _controller.text.trim();
+            Navigator.pop(context, text.isEmpty ? null : text);
+          },
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+
 class _TaskDetailContent extends StatelessWidget {
   final TaskView task;
 
@@ -971,39 +1023,10 @@ class _TaskDetailContent extends StatelessWidget {
   }
 
   Future<void> _showAddNoteDialog(BuildContext context) async {
-    final controller = TextEditingController();
     final result = await showDialog<String?>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Add Note'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: InputDecoration(
-            hintText: 'Enter your note...',
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-          ),
-          maxLines: 3,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final text = controller.text.trim();
-              Navigator.pop(ctx, text.isEmpty ? null : text);
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
+      builder: (_) => const _AddNoteDialog(),
     );
-
-    try {
-      controller.dispose();
-    } catch (_) {}
 
     if (result != null && result.isNotEmpty && context.mounted) {
       final taskState = context.read<TaskState>();
