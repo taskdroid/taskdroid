@@ -74,6 +74,32 @@ class ProfileState extends ChangeNotifier {
     }
   }
 
+  Future<void> setCalendarForCurrentProfile({
+    required int? calendarId,
+    required String? calendarName,
+  }) async {
+    final profile = currentProfile;
+    if (profile != null) {
+      final updated = profile.copyWith(
+        calendarId: calendarId,
+        calendarName: calendarName,
+        clearCalendar: calendarId == null,
+      );
+      await updateProfile(updated);
+    }
+  }
+
+  Future<void> setCalendarReminderForCurrentProfile(int? minutes) async {
+    final profile = currentProfile;
+    if (profile != null) {
+      final updated = profile.copyWith(
+        calendarReminderMinutes: minutes,
+        clearCalendarReminder: minutes == null,
+      );
+      await updateProfile(updated);
+    }
+  }
+
   Future<void> setRecurrenceLimitForCurrentProfile(int limit) async {
     final profile = currentProfile;
     if (profile != null) {

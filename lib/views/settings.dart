@@ -105,6 +105,51 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               const Divider(indent: 16, endIndent: 16, height: 1),
               ListTile(
+                leading: const Icon(Icons.calendar_month_outlined),
+                title: const Text(
+                  'Calendar',
+                  style: TextStyle(fontWeight: FontWeight.w500),
+                ),
+                subtitle: Text(
+                  currentProfile == null
+                      ? 'Select a profile to configure'
+                      : !currentProfile.calendarSync
+                      ? 'Enable System Calendar Sync first'
+                      : currentProfile.calendarName ??
+                            'Default writable calendar',
+                  style: TextStyle(
+                    color: currentProfile == null ? colorScheme.error : null,
+                  ),
+                ),
+                enabled: currentProfile != null && currentProfile.calendarSync,
+                onTap: currentProfile == null || !currentProfile.calendarSync
+                    ? null
+                    : () => _chooseCalendar(context),
+              ),
+              const Divider(indent: 16, endIndent: 16, height: 1),
+              ListTile(
+                leading: const Icon(Icons.notifications_active_outlined),
+                title: const Text(
+                  'Calendar reminder',
+                  style: TextStyle(fontWeight: FontWeight.w500),
+                ),
+                subtitle: Text(
+                  currentProfile == null
+                      ? 'Select a profile to configure'
+                      : !currentProfile.calendarSync
+                      ? 'Enable System Calendar Sync first'
+                      : _formatReminder(currentProfile.calendarReminderMinutes),
+                  style: TextStyle(
+                    color: currentProfile == null ? colorScheme.error : null,
+                  ),
+                ),
+                enabled: currentProfile != null && currentProfile.calendarSync,
+                onTap: currentProfile == null || !currentProfile.calendarSync
+                    ? null
+                    : () => _chooseCalendarReminder(context),
+              ),
+              const Divider(indent: 16, endIndent: 16, height: 1),
+              ListTile(
                 title: const Text(
                   'Recurring instances ahead',
                   style: TextStyle(fontWeight: FontWeight.w500),
@@ -578,6 +623,176 @@ class _SettingsPageState extends State<SettingsPage> {
     await _applyStoragePath(context, null, profileState);
   }
 
+  String _formatReminder(int? minutes) {
+    if (minutes == null) return 'No reminder';
+    if (minutes == 0) return 'At event start';
+    if (minutes == 60) return '1 hour before';
+    return '$minutes minutes before';
+  }
+
+  Future<void> _chooseCalendar(BuildContext context) async {
+    final profileState = context.read<ProfileState>();
+    final calendarService = CalendarService();
+    final hasPermission = await calendarService.requestPermissions();
+    if (!context.mounted) return;
+
+    if (!hasPermission) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Calendar permission is required to choose a calendar'),
+        ),
+      );
+      return;
+    }
+
+    final calendars = await calendarService.listCalendars();
+    if (!context.mounted) return;
+
+    if (calendars.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No writable calendars found')),
+      );
+      return;
+    }
+
+    final selected = await showModalBottomSheet<_CalendarChoice>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.auto_awesome_outlined),
+              title: const Text('Default writable calendar'),
+              subtitle: const Text(
+                'Use Android primary calendar when possible',
+              ),
+              onTap: () => Navigator.pop(
+                sheetContext,
+                const _CalendarChoice.useDefault(),
+              ),
+            ),
+            const Divider(height: 1),
+            for (final calendar in calendars)
+              ListTile(
+                title: Text(calendar.name),
+                subtitle: Text(
+                  [
+                    if (calendar.accountName.isNotEmpty) calendar.accountName,
+                    if (calendar.isPrimary) 'Primary',
+                  ].join(' • '),
+                ),
+                trailing: profileState.currentProfile?.calendarId == calendar.id
+                    ? const Icon(Icons.check)
+                    : null,
+                onTap: () => Navigator.pop(
+                  sheetContext,
+                  _CalendarChoice.selected(calendar),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+
+    if (selected == null || !context.mounted) return;
+    await profileState.setCalendarForCurrentProfile(
+      calendarId: selected.calendar?.id,
+      calendarName: selected.calendar?.name,
+    );
+    if (!context.mounted) return;
+    await _resyncCalendarIfEnabled(context);
+  }
+
+  Future<void> _chooseCalendarReminder(BuildContext context) async {
+    final profileState = context.read<ProfileState>();
+    final current = profileState.currentProfile?.calendarReminderMinutes;
+    final selected = await showDialog<int>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: const Text('Calendar Reminder'),
+        children: [
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(dialogContext, -1),
+            child: Row(
+              children: [
+                const Expanded(child: Text('No reminder')),
+                if (current == null) const Icon(Icons.check),
+              ],
+            ),
+          ),
+          for (final minutes in const [0, 5, 10, 15, 30, 60])
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(dialogContext, minutes),
+              child: Row(
+                children: [
+                  Expanded(child: Text(_formatReminder(minutes))),
+                  if (current == minutes) const Icon(Icons.check),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+
+    if (selected == null || !context.mounted) return;
+    await profileState.setCalendarReminderForCurrentProfile(
+      selected < 0 ? null : selected,
+    );
+    if (!context.mounted) return;
+    await _resyncCalendarIfEnabled(context);
+  }
+
+  Future<void> _resyncCalendarIfEnabled(BuildContext context) async {
+    final profileState = context.read<ProfileState>();
+    final profile = profileState.currentProfile;
+    if (profile == null || !profile.calendarSync) return;
+
+    final taskState = context.read<TaskState>();
+    await taskState.loadProfile(profile);
+    taskState.refreshCalendarConfig(profile);
+    await taskState.refreshPendingTasks();
+
+    final calendars = await CalendarService().listCalendars();
+    final calendarExists =
+        profile.calendarId == null ||
+        calendars.any((c) => c.id == profile.calendarId);
+    Profile? effectiveProfile = profile;
+    if (!calendarExists) {
+      final fallback = calendars.isNotEmpty ? calendars.first : null;
+      await profileState.setCalendarForCurrentProfile(
+        calendarId: fallback?.id,
+        calendarName: fallback?.name,
+      );
+      if (!context.mounted) return;
+      effectiveProfile = profileState.currentProfile;
+      if (effectiveProfile != null)
+        taskState.refreshCalendarConfig(effectiveProfile);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            fallback == null
+                ? 'Selected calendar no longer exists. Remove it from settings to continue.'
+                : 'Selected calendar no longer exists. Using "${fallback.name}" instead.',
+          ),
+        ),
+      );
+    }
+
+    if (effectiveProfile == null) return;
+    final allTasksToSync = [
+      ...taskState.pendingTasks,
+      ...taskState.waitingTasks,
+      ...taskState.scheduledTasks,
+    ];
+    await CalendarService().batchSync(
+      allTasksToSync,
+      calendarId: effectiveProfile.calendarId,
+      reminderMinutes: effectiveProfile.calendarReminderMinutes,
+    );
+  }
+
   Future<void> _handleCalendarToggle(BuildContext context, bool enabled) async {
     final profileState = context.read<ProfileState>();
     final taskState = context.read<TaskState>();
@@ -603,6 +818,7 @@ class _SettingsPageState extends State<SettingsPage> {
       final currentP = profileState.currentProfile;
       if (currentP != null) {
         await taskState.loadProfile(currentP);
+        taskState.refreshCalendarConfig(currentP);
         await taskState.refreshPendingTasks();
 
         final allTasksToSync = [
@@ -610,7 +826,11 @@ class _SettingsPageState extends State<SettingsPage> {
           ...taskState.waitingTasks,
           ...taskState.scheduledTasks,
         ];
-        await calendarService.batchSync(allTasksToSync);
+        await calendarService.batchSync(
+          allTasksToSync,
+          calendarId: currentP.calendarId,
+          reminderMinutes: currentP.calendarReminderMinutes,
+        );
       }
 
       if (!context.mounted) return;
@@ -683,6 +903,14 @@ class _SettingsPageState extends State<SettingsPage> {
       ),
     );
   }
+}
+
+class _CalendarChoice {
+  final CalendarInfo? calendar;
+
+  const _CalendarChoice.useDefault() : calendar = null;
+
+  const _CalendarChoice.selected(this.calendar);
 }
 
 class _RecurrenceLimitDialog extends StatefulWidget {

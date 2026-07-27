@@ -28,6 +28,8 @@ class TaskState extends ChangeNotifier {
   bool _isSyncing = false;
   String? _currentProfileId;
   bool _isCalendarSyncEnabled = false;
+  int? _calendarId;
+  int? _calendarReminderMinutes;
   Timer? _debounceFilterTimer;
 
   TaskManager? get taskManager => _repo.taskManager;
@@ -95,7 +97,7 @@ class TaskState extends ChangeNotifier {
     }
 
     _currentProfileId = profile.id;
-    _isCalendarSyncEnabled = profile.calendarSync;
+    refreshCalendarConfig(profile);
     notifyListeners();
 
     try {
@@ -114,6 +116,12 @@ class TaskState extends ChangeNotifier {
       debugPrint('Failed to load profile: $e');
       notifyListeners();
     }
+  }
+
+  void refreshCalendarConfig(Profile profile) {
+    _isCalendarSyncEnabled = profile.calendarSync;
+    _calendarId = profile.calendarId;
+    _calendarReminderMinutes = profile.calendarReminderMinutes;
   }
 
   Future<void> refreshPendingTasks() async {
@@ -174,7 +182,11 @@ class TaskState extends ChangeNotifier {
       final newTask = await _repo.getTaskByUuid(result.uuid!);
       if (newTask != null) {
         try {
-          await _calendarService.syncTask(newTask);
+          await _calendarService.syncTask(
+            newTask,
+            calendarId: _calendarId,
+            reminderMinutes: _calendarReminderMinutes,
+          );
         } catch (e) {
           return 'Calendar sync failed.';
         }
@@ -264,7 +276,11 @@ class TaskState extends ChangeNotifier {
       final updated = await _repo.getTaskByUuid(uuid);
       if (updated != null) {
         try {
-          await _calendarService.syncTask(updated);
+          await _calendarService.syncTask(
+            updated,
+            calendarId: _calendarId,
+            reminderMinutes: _calendarReminderMinutes,
+          );
         } catch (e) {
           return 'Calendar sync failed.';
         }

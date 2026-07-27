@@ -12,6 +12,9 @@ void main() {
         secret: 's3cret',
         serverUrl: 'https://sync.example.com',
         calendarSync: true,
+        calendarId: 42,
+        calendarName: 'Work Calendar',
+        calendarReminderMinutes: 15,
       );
 
       final json = profile.toJson();
@@ -23,6 +26,9 @@ void main() {
       expect(restored.secret, profile.secret);
       expect(restored.serverUrl, profile.serverUrl);
       expect(restored.calendarSync, profile.calendarSync);
+      expect(restored.calendarId, profile.calendarId);
+      expect(restored.calendarName, profile.calendarName);
+      expect(restored.calendarReminderMinutes, profile.calendarReminderMinutes);
     });
 
     test('copyWith updates fields', () {
@@ -34,9 +40,19 @@ void main() {
         serverUrl: 'url',
       );
 
-      final updated = profile.copyWith(name: 'Updated', calendarSync: true);
+      final updated = profile.copyWith(
+        name: 'Updated',
+        calendarSync: true,
+        calendarId: 7,
+        calendarName: 'Personal',
+        calendarReminderMinutes: null,
+        clearCalendarReminder: true,
+      );
       expect(updated.name, 'Updated');
       expect(updated.calendarSync, true);
+      expect(updated.calendarId, 7);
+      expect(updated.calendarName, 'Personal');
+      expect(updated.calendarReminderMinutes, isNull);
       expect(updated.id, profile.id);
     });
 
@@ -45,6 +61,9 @@ void main() {
       expect(profile.id, 'x');
       expect(profile.name, '');
       expect(profile.calendarSync, false);
+      expect(profile.calendarId, isNull);
+      expect(profile.calendarName, isNull);
+      expect(profile.calendarReminderMinutes, 0);
     });
   });
 
@@ -117,5 +136,4 @@ void main() {
       expect(restored.flagMatchMode, FilterMatchMode.or);
     });
   });
-
 }

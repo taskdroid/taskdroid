@@ -39,7 +39,9 @@ class MainActivity : FlutterActivity() {
                 }
 
                 "requestPermissions" -> {
-                    if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_CALENDAR) != PackageManager.PERMISSION_GRANTED) {
+                    val read = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CALENDAR)
+                    val write = ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_CALENDAR)
+                    if (read != PackageManager.PERMISSION_GRANTED || write != PackageManager.PERMISSION_GRANTED) {
                         pendingResult = result
                         ActivityCompat.requestPermissions(
                             this,
@@ -51,16 +53,35 @@ class MainActivity : FlutterActivity() {
                     }
                 }
 
+                "listCalendars" -> {
+                    scope.launch {
+                        val calendars = repo!!.listWritableCalendars()
+                        withContext(Dispatchers.Main) {
+                            result.success(calendars)
+                        }
+                    }
+                }
+
                 "saveTask" -> {
                     val uuid = call.argument<String>("uuid")
                     val title = call.argument<String>("title")
                     val desc = call.argument<String>("description")
                     val start = call.argument<Number>("start")?.toLong()
                     val end = call.argument<Number>("end")?.toLong()
+                    val calendarId = call.argument<Number>("calendarId")?.toLong()
+                    val reminderMinutes = call.argument<Number>("reminderMinutes")?.toInt()
 
                     if (uuid != null && title != null && start != null && end != null) {
                         scope.launch {
-                            val success = repo!!.saveEvent(uuid, title, desc ?: "", start, end, null)
+                            val success = repo!!.saveEvent(
+                                uuid,
+                                title,
+                                desc ?: "",
+                                start,
+                                end,
+                                calendarId,
+                                reminderMinutes,
+                            )
                             withContext(Dispatchers.Main) {
                                 result.success(success)
                             }
@@ -95,9 +116,11 @@ class MainActivity : FlutterActivity() {
 
                 "batchSync" -> {
                     val tasks = call.argument<List<Map<String, Any>>>("tasks")
+                    val calendarId = call.argument<Number>("calendarId")?.toLong()
+                    val reminderMinutes = call.argument<Number>("reminderMinutes")?.toInt()
                     if (tasks != null) {
                         scope.launch {
-                            val msg = repo!!.batchSync(tasks)
+                            val msg = repo!!.batchSync(tasks, calendarId, reminderMinutes)
                             withContext(Dispatchers.Main) {
                                 result.success(msg)
                             }
@@ -121,7 +144,10 @@ class MainActivity : FlutterActivity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == PERMISSION_REQUEST_CODE) {
-            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            if (grantResults.size >= 2 &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED &&
+                grantResults[1] == PackageManager.PERMISSION_GRANTED
+            ) {
                 pendingResult?.success(true)
             } else {
                 pendingResult?.success(false)
