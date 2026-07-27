@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.2.1] - 2026-07-27
+
+### Added
+
+- taskrc config system replacing hardcoded urgency coefficients and recurrence limit (#17)
+- Config viewer and raw editor on the Credentials page
+- Recurrence-limit dialog on the Settings page
+- Urgency inheritance from blocked to blocking tasks (`urgency.inherit`)
+- Dynamic user coefficients: `urgency.user.tag.*.coefficient`,
+  `urgency.user.project.*.coefficient`, `urgency.user.keyword.*.coefficient`
+- Arbitrary UDA coefficients via `urgency.uda.<name>.coefficient`
+- `pairs_with_prefix()` helper for dynamic taskrc lookups
+- Filter tab persistence — last tab restored on app restart
+
+### Changed
+
+- Urgency scoring overhauled to match Taskwarrior behavior:
+  generic UDA mechanism replacing hardcoded H/M/L priority, 21-day due ramp
+  (up from 14), configurable age max via `urgency.age.max`
+- Release build profile: `opt-level=3`, `codegen-units=1`, `panic=abort`,
+  `strip=true`
+- Narrowed `tokio` to only `sync` features; removed unused `uuid` dependency
+- Debug builds use a `.debug` appId suffix with distinct label and icons
+
+### Fixed
+
+- `_dependents.isEmpty` assertion crash when chaining routes from bottom
+  sheets and dialogs — all `TextEditingController` usage extracted into
+  proper `StatefulWidget` classes; provider mutations deferred until after
+  route `await` with `mounted` check (closes #18)
+- Generated version file no longer tracked in git
+
 ## [0.2.0] - 2026-06-28
 
 ### Added
@@ -73,5 +105,6 @@
 - `TestContext` wrapper for CLI-like ergonomics; known gaps print info instead of failing
 - Update CI workflow actions
 
-[0.2.0]: https://github.com/anomalco/taskdroid/releases/tag/v0.2.0
-[0.1.0]: https://github.com/anomalco/taskdroid/releases/tag/v0.1.0
+[0.2.1]: https://github.com/taskdroid/taskdroid/releases/tag/v0.2.1
+[0.2.0]: https://github.com/taskdroid/taskdroid/releases/tag/v0.2.0
+[0.1.0]: https://github.com/taskdroid/taskdroid/releases/tag/v0.1.0
