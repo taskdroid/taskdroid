@@ -19,5 +19,5 @@ class AppVersion {
 }
 ''';
   File('lib/version.dart').writeAsStringSync(output);
-  print('Generated lib/version.dart with version $version');
+  stdout.writeln('Generated lib/version.dart with version $version');
 }

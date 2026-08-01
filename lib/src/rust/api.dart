@@ -7,7 +7,7 @@ import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `extract_recurrence_from_udas`, `extract_uda_value`, `map_error`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `hash`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `hash`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<TaskManager>>
 abstract class TaskManager implements RustOpaqueInterface {
@@ -32,8 +32,6 @@ abstract class TaskManager implements RustOpaqueInterface {
   Future<List<UdaPair>> getAllConfig();
 
   Future<String?> getConfigValue({required String key});
-
-  Future<List<ConfigIssue>> validateTaskrc({required String content});
 
   Future<TaskView> getTask({required String uuidStr});
 
@@ -65,6 +63,8 @@ abstract class TaskManager implements RustOpaqueInterface {
     required String uuidStr,
     required UpdateTaskParams params,
   });
+
+  Future<List<ConfigIssue>> validateTaskrc({required String content});
 }
 
 class ConfigIssue {
@@ -77,6 +77,18 @@ class ConfigIssue {
     required this.kind,
     required this.message,
   });
+
+  @override
+  int get hashCode => line.hashCode ^ kind.hashCode ^ message.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ConfigIssue &&
+          runtimeType == other.runtimeType &&
+          line == other.line &&
+          kind == other.kind &&
+          message == other.message;
 }
 
 class CreateTaskParams {

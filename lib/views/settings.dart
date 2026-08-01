@@ -767,8 +767,9 @@ class _SettingsPageState extends State<SettingsPage> {
       );
       if (!context.mounted) return;
       effectiveProfile = profileState.currentProfile;
-      if (effectiveProfile != null)
+      if (effectiveProfile != null) {
         taskState.refreshCalendarConfig(effectiveProfile);
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
