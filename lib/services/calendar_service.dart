@@ -78,6 +78,12 @@ class CalendarService {
     await _channel.invokeMethod('deleteTask', {'uuid': uuid});
   }
 
+  Future<bool> eventExists(String uuid) async {
+    final bool result =
+        await _channel.invokeMethod('eventExists', {'uuid': uuid});
+    return result;
+  }
+
   Future<int> deleteAllEvents() async {
     final int count = await _channel.invokeMethod('deleteAllEvents');
     return count;

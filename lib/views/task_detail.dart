@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:taskdroid/providers/profile_state.dart';
 import 'package:taskdroid/providers/task_state.dart';
+import 'package:taskdroid/services/calendar_service.dart';
 import 'package:taskdroid/src/rust/api.dart';
 import 'package:taskdroid/widgets/task_editor.dart';
 
@@ -152,7 +153,6 @@ class _TaskDetailContent extends StatelessWidget {
     final profileState = context.watch<ProfileState>();
     final isCalendarSyncEnabled =
         profileState.currentProfile?.calendarSync ?? false;
-    final hasDueDate = task.due != null;
 
     String duration = '60';
     try {
@@ -186,62 +186,11 @@ class _TaskDetailContent extends StatelessWidget {
             _buildActionRow(context, colorScheme, isStarted),
             const SizedBox(height: 24),
 
-            if (isCalendarSyncEnabled && hasDueDate)
-              Container(
-                margin: const EdgeInsets.only(bottom: 24),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 16,
-                ),
-                decoration: BoxDecoration(
-                  color: colorScheme.tertiaryContainer.withValues(alpha: 0.4),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: colorScheme.tertiary.withValues(alpha: 0.2),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: colorScheme.tertiary.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Icon(
-                        Icons.event_available,
-                        color: colorScheme.tertiary,
-                        size: 24,
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            "Synced to System Calendar",
-                            style: TextStyle(
-                              color: colorScheme.onTertiaryContainer,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            "Duration: $duration mins",
-                            style: TextStyle(
-                              color: colorScheme.onTertiaryContainer.withValues(
-                                alpha: 0.8,
-                              ),
-                              fontSize: 13,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+            _CalendarSyncStatus(
+              task: task,
+              isCalendarSyncEnabled: isCalendarSyncEnabled,
+              duration: duration,
+            ),
 
             _buildSectionHeader(context, 'Dates & Timeline'),
             _buildDatesCard(context, colorScheme),
@@ -1300,6 +1249,142 @@ class _TaskDetailContent extends StatelessWidget {
       addAnnotation: null,
       removeAnnotations: [],
       start: null,
+    );
+  }
+}
+
+class _CalendarSyncStatus extends StatefulWidget {
+  final TaskView task;
+  final bool isCalendarSyncEnabled;
+  final String duration;
+
+  const _CalendarSyncStatus({
+    required this.task,
+    required this.isCalendarSyncEnabled,
+    required this.duration,
+  });
+
+  @override
+  State<_CalendarSyncStatus> createState() => _CalendarSyncStatusState();
+}
+
+class _CalendarSyncStatusState extends State<_CalendarSyncStatus> {
+  bool? _exists;
+
+  bool get _hasEventDate =>
+      widget.task.due != null ||
+      widget.task.scheduled != null ||
+      widget.task.wait != null;
+
+  @override
+  void initState() {
+    super.initState();
+    _check();
+  }
+
+  @override
+  void didUpdateWidget(covariant _CalendarSyncStatus oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.task.uuid != widget.task.uuid) {
+      _exists = null;
+      _check();
+    }
+  }
+
+  Future<void> _check() async {
+    if (!widget.isCalendarSyncEnabled || !_hasEventDate) return;
+    final uuid = widget.task.uuid;
+    try {
+      final exists = await CalendarService().eventExists(uuid);
+      if (!mounted || widget.task.uuid != uuid) return;
+      setState(() => _exists = exists);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _exists = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.isCalendarSyncEnabled || !_hasEventDate) {
+      return const SizedBox.shrink();
+    }
+
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    final checking = _exists == null;
+    final synced = _exists == true;
+
+    final Color tint;
+    final Color border;
+    final Color iconColor;
+    final IconData icon;
+    final String title;
+    final String subtitle;
+    Widget? leading;
+
+    if (checking) {
+      tint = colorScheme.surfaceContainerHighest.withValues(alpha: 0.3);
+      border = colorScheme.outline.withValues(alpha: 0.1);
+      iconColor = colorScheme.onSurfaceVariant;
+      icon = Icons.sync;
+      title = 'Checking calendar sync…';
+      subtitle = '';
+      leading = const SizedBox(
+        width: 18,
+        height: 18,
+        child: CircularProgressIndicator(strokeWidth: 2),
+      );
+    } else if (synced) {
+      tint = colorScheme.tertiaryContainer.withValues(alpha: 0.35);
+      border = colorScheme.tertiary.withValues(alpha: 0.2);
+      iconColor = colorScheme.tertiary;
+      icon = Icons.event_available;
+      title = 'Synced to calendar';
+      subtitle = '· ${widget.duration} min';
+    } else {
+      tint = colorScheme.errorContainer.withValues(alpha: 0.3);
+      border = colorScheme.error.withValues(alpha: 0.15);
+      iconColor = colorScheme.error;
+      icon = Icons.sync_problem;
+      title = 'Not synced to calendar';
+      subtitle = '· open Settings to fix';
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 24),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: tint,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: border),
+      ),
+      child: Row(
+        children: [
+          if (leading != null) leading else Icon(icon, size: 18, color: iconColor),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              title,
+              style: TextStyle(
+                color: colorScheme.onSurface,
+                fontWeight: FontWeight.w500,
+                fontSize: 13,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (subtitle.isNotEmpty)
+            Text(
+              subtitle,
+              style: TextStyle(
+                color: colorScheme.onSurfaceVariant.withValues(alpha: 0.8),
+                fontSize: 12,
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

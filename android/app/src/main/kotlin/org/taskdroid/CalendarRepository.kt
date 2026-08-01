@@ -146,6 +146,8 @@ class CalendarRepository(
         context.contentResolver.insert(CalendarContract.Reminders.CONTENT_URI, values)
     }
 
+    fun hasEvent(uuid: String): Boolean = getEventIdByUuid(uuid) != null
+
     fun deleteEvent(uuid: String): Boolean {
         val eventId = getEventIdByUuid(uuid) ?: return false
         val deleteUri = ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, eventId)

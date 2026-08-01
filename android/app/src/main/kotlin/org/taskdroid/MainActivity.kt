@@ -114,6 +114,20 @@ class MainActivity : FlutterActivity() {
                     }
                 }
 
+                "eventExists" -> {
+                    val uuid = call.argument<String>("uuid")
+                    if (uuid != null) {
+                        scope.launch {
+                            val exists = repo!!.hasEvent(uuid)
+                            withContext(Dispatchers.Main) {
+                                result.success(exists)
+                            }
+                        }
+                    } else {
+                        result.error("INVALID_ARGS", "UUID is null", null)
+                    }
+                }
+
                 "batchSync" -> {
                     val tasks = call.argument<List<Map<String, Any>>>("tasks")
                     val calendarId = call.argument<Number>("calendarId")?.toLong()
