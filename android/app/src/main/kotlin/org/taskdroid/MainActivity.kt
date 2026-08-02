@@ -1,6 +1,8 @@
 package org.taskdroid
 
 import android.Manifest
+import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import androidx.annotation.NonNull
 import androidx.core.app.ActivityCompat
@@ -16,8 +18,12 @@ import kotlinx.coroutines.withContext
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "org.taskdroid/calendar"
+    private val FILE_CHANNEL = "org.taskdroid/fileio"
     private val PERMISSION_REQUEST_CODE = 9001
+    private val SAVE_FILE_REQUEST_CODE = 9002
     private var pendingResult: MethodChannel.Result? = null
+    private var pendingFileResult: MethodChannel.Result? = null
+    private var pendingFileBytes: ByteArray? = null
     private var repo: CalendarRepository? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -25,6 +31,29 @@ class MainActivity : FlutterActivity() {
         @NonNull flutterEngine: FlutterEngine,
     ) {
         super.configureFlutterEngine(flutterEngine)
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, FILE_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "saveFile" -> {
+                    val suggestedName = call.argument<String>("suggestedName")
+                    val data = call.argument<ByteArray>("data")
+                    if (suggestedName != null && data != null) {
+                        pendingFileResult = result
+                        pendingFileBytes = data
+                        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = "application/json"
+                            putExtra(Intent.EXTRA_TITLE, suggestedName)
+                        }
+                        startActivityForResult(intent, SAVE_FILE_REQUEST_CODE)
+                    } else {
+                        result.error("INVALID_ARGS", "suggestedName or data is null", null)
+                    }
+                }
+
+                else -> result.notImplemented()
+            }
+        }
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             if (repo == null) {
@@ -167,6 +196,39 @@ class MainActivity : FlutterActivity() {
                 pendingResult?.success(false)
             }
             pendingResult = null
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != SAVE_FILE_REQUEST_CODE) return
+
+        val result = pendingFileResult
+        val bytes = pendingFileBytes
+        pendingFileResult = null
+        pendingFileBytes = null
+        if (result == null || bytes == null) return
+
+        if (resultCode != Activity.RESULT_OK || data?.data == null) {
+            result.success(null)
+            return
+        }
+
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    val stream = contentResolver.openOutputStream(data.data!!)
+                    if (stream == null) {
+                        false
+                    } else {
+                        stream.use { it.write(bytes) }
+                        true
+                    }
+                }.getOrDefault(false)
+            }
+            withContext(Dispatchers.Main) {
+                result.success(ok)
+            }
         }
     }
 }
