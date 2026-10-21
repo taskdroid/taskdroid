@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Opt-in "Trust user CA certificates" setting for CAs installed through
+  Android Settings; user-installed CAs are not trusted by default
+- "Test Server" connection check now runs through Rust and uses the same TLS
+  trust store as sync
+
+### Fixed
+
+- Sync now uses Android's certificate store, fixing HTTPS sync with private
+  CAs installed via Settings or in the system trust store; CAs disabled in
+  Settings are no longer trusted (closes #19)
+
 ## [0.2.1] - 2026-07-27
 
 ### Added

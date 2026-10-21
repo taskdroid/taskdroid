@@ -112,6 +112,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   BigInt? dco_decode_opt_box_autoadd_usize(dynamic raw);
 
   @protected
+  ServerTestResult dco_decode_server_test_result(dynamic raw);
+
+  @protected
   TaskAnnotation dco_decode_task_annotation(dynamic raw);
 
   @protected
@@ -235,6 +238,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   BigInt? sse_decode_opt_box_autoadd_usize(SseDeserializer deserializer);
+
+  @protected
+  ServerTestResult sse_decode_server_test_result(SseDeserializer deserializer);
 
   @protected
   TaskAnnotation sse_decode_task_annotation(SseDeserializer deserializer);
@@ -385,6 +391,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_opt_box_autoadd_usize(BigInt? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_server_test_result(
+    ServerTestResult self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_task_annotation(

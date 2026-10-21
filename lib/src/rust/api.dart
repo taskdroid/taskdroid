@@ -6,8 +6,23 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `extract_recurrence_from_udas`, `extract_uda_value`, `map_error`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `hash`
+// These functions are ignored because they are not marked as `pub`: `error_chain`, `extract_recurrence_from_udas`, `extract_uda_value`, `map_error`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `hash`
+
+/// Configures the process-wide HTTPS trust store.
+///
+/// `trust_user_certs` adds CAs installed through Android Settings to the
+/// system trust store. It must be called before any HTTPS request; ureq caches
+/// its root store, so changes take effect after an app restart.
+void configureTls({required bool trustUserCerts}) =>
+    RustLib.instance.api.crateApiConfigureTls(trustUserCerts: trustUserCerts);
+
+/// Checks that `url` points at a reachable TaskChampion sync server.
+///
+/// This intentionally uses ureq with the same native certificate store as the
+/// sync client, so a server trusted by sync is also trusted here.
+Future<ServerTestResult> testServer({required String url}) =>
+    RustLib.instance.api.crateApiTestServer(url: url);
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<TaskManager>>
 abstract class TaskManager implements RustOpaqueInterface {
@@ -148,6 +163,25 @@ class CreateTaskParams {
           recurrence == other.recurrence &&
           until == other.until &&
           udas == other.udas;
+}
+
+/// Result of the "Test Server" connectivity check.
+class ServerTestResult {
+  final bool success;
+  final String message;
+
+  const ServerTestResult({required this.success, required this.message});
+
+  @override
+  int get hashCode => success.hashCode ^ message.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ServerTestResult &&
+          runtimeType == other.runtimeType &&
+          success == other.success &&
+          message == other.message;
 }
 
 class TaskAnnotation {

@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 39280879;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1451798136;
 
 // Section: executor
 
@@ -1429,6 +1429,74 @@ fn wire__crate__api__TaskManager_validate_taskrc_impl(
         },
     )
 }
+fn wire__crate__api__configure_tls_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "configure_tls",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_trust_user_certs = <bool>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Result::<_, ()>::Ok({
+                    crate::api::configure_tls(api_trust_user_certs);
+                })?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__test_server_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "test_server",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_url = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || async move {
+                        let output_ok = crate::api::test_server(api_url).await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
 
 // Section: related_funcs
 
@@ -1652,6 +1720,18 @@ impl SseDecode for Option<usize> {
         } else {
             return None;
         }
+    }
+}
+
+impl SseDecode for crate::api::ServerTestResult {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_success = <bool>::sse_decode(deserializer);
+        let mut var_message = <String>::sse_decode(deserializer);
+        return crate::api::ServerTestResult {
+            success: var_success,
+            message: var_message,
+        };
     }
 }
 
@@ -1899,6 +1979,7 @@ fn pde_ffi_dispatcher_primary_impl(
         22 => wire__crate__api__TaskManager_undo_impl(port, ptr, rust_vec_len, data_len),
         23 => wire__crate__api__TaskManager_update_task_impl(port, ptr, rust_vec_len, data_len),
         24 => wire__crate__api__TaskManager_validate_taskrc_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__test_server_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1912,6 +1993,7 @@ fn pde_ffi_dispatcher_sync_impl(
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
         16 => wire__crate__api__TaskManager_new_impl(ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__configure_tls_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1974,6 +2056,24 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::CreateTaskParams>
     for crate::api::CreateTaskParams
 {
     fn into_into_dart(self) -> crate::api::CreateTaskParams {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::ServerTestResult {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.success.into_into_dart().into_dart(),
+            self.message.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::ServerTestResult {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::ServerTestResult>
+    for crate::api::ServerTestResult
+{
+    fn into_into_dart(self) -> crate::api::ServerTestResult {
         self
     }
 }
@@ -2316,6 +2416,14 @@ impl SseEncode for Option<usize> {
         if let Some(value) = self {
             <usize>::sse_encode(value, serializer);
         }
+    }
+}
+
+impl SseEncode for crate::api::ServerTestResult {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.success, serializer);
+        <String>::sse_encode(self.message, serializer);
     }
 }
 

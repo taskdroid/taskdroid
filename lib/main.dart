@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taskdroid/providers/app_state.dart';
 import 'package:taskdroid/providers/profile_state.dart';
 import 'package:taskdroid/providers/task_state.dart';
+import 'package:taskdroid/src/rust/api.dart';
 import 'package:taskdroid/src/rust/frb_generated.dart';
 import 'package:taskdroid/views/home.dart';
 import 'package:taskdroid/views/credentials.dart';
@@ -13,6 +15,14 @@ import 'package:taskdroid/views/data_management.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await RustLib.init();
+
+  // ureq caches its root store on the first HTTPS request, so the trust
+  // setting has to be applied before the UI can trigger any network call
+  final prefs = await SharedPreferences.getInstance();
+  configureTls(
+    trustUserCerts: prefs.getBool(AppState.trustUserCertsKey) ?? false,
+  );
+
   runApp(
     MultiProvider(
       providers: [

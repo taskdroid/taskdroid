@@ -8,7 +8,6 @@ import 'package:taskdroid/services/profile_storage.dart';
 import 'package:taskdroid/services/taskrc_config_service.dart';
 import 'package:taskdroid/src/rust/api.dart';
 import 'package:taskdroid/widgets/app_drawer.dart';
-import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
 
 class CredentialsPage extends StatefulWidget {
@@ -27,6 +26,7 @@ class _CredentialsPageState extends State<CredentialsPage> {
 
   bool _isLoading = false;
   bool _isTesting = false;
+  bool _testSuccess = false;
   String? _testResult;
   bool _isEditing = false;
   String? _editingProfileId;
@@ -64,6 +64,7 @@ class _CredentialsPageState extends State<CredentialsPage> {
         _serverUrlController.text = profile.serverUrl;
         _editingProfileId = profile.id;
         _isEditing = true;
+        _testSuccess = false;
         _testResult = null;
       });
       _loadConfig(profile);
@@ -80,6 +81,7 @@ class _CredentialsPageState extends State<CredentialsPage> {
       _serverUrlController.clear();
       _editingProfileId = null;
       _isEditing = false;
+      _testSuccess = false;
       _testResult = null;
       _configValues = {};
       _configPath = null;
@@ -158,34 +160,36 @@ class _CredentialsPageState extends State<CredentialsPage> {
   Future<void> _testServer() async {
     final serverUrl = _serverUrlController.text.trim();
     if (serverUrl.isEmpty) {
-      setState(() => _testResult = 'Please enter a server URL first');
+      setState(() {
+        _testSuccess = false;
+        _testResult = 'Please enter a server URL first';
+      });
       return;
     }
 
     setState(() {
       _isTesting = true;
+      _testSuccess = false;
       _testResult = null;
     });
 
     try {
-      final uri = Uri.parse(serverUrl);
-      final response = await http.get(uri).timeout(const Duration(seconds: 10));
-
+      final result = await testServer(url: serverUrl);
       if (!mounted) return;
-
-      if (response.statusCode == 200 &&
-          response.body.contains('TaskChampion sync server')) {
-        setState(() => _testResult = 'Success: TaskChampion server verified');
-      } else {
-        setState(
-          () => _testResult =
-              'Error: Not a valid sync server (HTTP ${response.statusCode})',
-        );
-      }
+      setState(() {
+        _testSuccess = result.success;
+        _testResult = result.message;
+      });
     } catch (e) {
-      setState(() => _testResult = 'Error: Connection failed');
+      if (!mounted) return;
+      setState(() {
+        _testSuccess = false;
+        _testResult = 'Error: Connection failed: $e';
+      });
     } finally {
-      setState(() => _isTesting = false);
+      if (mounted) {
+        setState(() => _isTesting = false);
+      }
     }
   }
 
@@ -396,28 +400,55 @@ class _CredentialsPageState extends State<CredentialsPage> {
                             padding: const EdgeInsets.all(12),
                             width: double.infinity,
                             decoration: BoxDecoration(
-                              color: _testResult!.contains('Success')
+                              color: _testSuccess
                                   ? Colors.green.withValues(alpha: 0.1)
                                   : colorScheme.errorContainer.withValues(
                                       alpha: 0.3,
                                     ),
                               borderRadius: BorderRadius.circular(12),
                               border: Border.all(
-                                color: _testResult!.contains('Success')
+                                color: _testSuccess
                                     ? Colors.green
                                     : colorScheme.error,
                                 width: 0.5,
                               ),
                             ),
-                            child: Text(
-                              _testResult!,
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: _testResult!.contains('Success')
-                                    ? Colors.green.shade800
-                                    : colorScheme.error,
-                                fontWeight: FontWeight.bold,
-                              ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _testResult!,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: _testSuccess
+                                        ? Colors.green.shade800
+                                        : colorScheme.error,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                if (!_testSuccess &&
+                                    (_testResult!.toLowerCase().contains(
+                                          'certificate',
+                                        ) ||
+                                        _testResult!.toLowerCase().contains(
+                                          'unknownissuer',
+                                        )))
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 6),
+                                    child: Text(
+                                      'Using a private CA? Install it in Android '
+                                      'Settings, then enable "Trust user CA '
+                                      'certificates" in Taskdroid Settings and '
+                                      'restart.',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: colorScheme.onErrorContainer
+                                            .withValues(alpha: 0.8),
+                                        fontWeight: FontWeight.normal,
+                                      ),
+                                    ),
+                                  ),
+                              ],
                             ),
                           ),
                         ],

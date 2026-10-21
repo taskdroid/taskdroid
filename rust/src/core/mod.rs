@@ -4,6 +4,7 @@ pub mod manager;
 pub mod models;
 pub mod query;
 mod query_language;
+pub(crate) mod tls;
 pub mod utils;
 
 #[cfg(test)]
