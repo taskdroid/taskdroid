@@ -1179,6 +1179,32 @@ fn tw_test_import_freeform() {
 }
 
 #[test]
+fn tw_test_import_line_by_line() {
+    // Taskwarrior 2 wrote one JSON object per line; `task import` still reads
+    // that format as a fallback.
+    let mut ctx = TestContext::new();
+    let payload = concat!(
+        "{\"uuid\":\"66666666-6666-6666-6666-666666666666\",\"description\":\"six\",\"status\":\"pending\",\"entry\":\"1234567889\"}\n",
+        "{\"uuid\":\"77777777-7777-7777-7777-777777777777\",\"description\":\"seven\",\"status\":\"pending\",\"entry\":\"1234567889\"}\n",
+    );
+
+    assert_eq!(ctx.import(payload).expect("import"), 2);
+    assert_eq!(
+        ctx.get("66666666-6666-6666-6666-666666666666")
+            .core
+            .description,
+        "six"
+    );
+    assert_eq!(
+        ctx.get("77777777-7777-7777-7777-777777777777")
+            .core
+            .description,
+        "seven"
+    );
+    println!("PASS: import line-per-task JSON");
+}
+
+#[test]
 fn tw_test_import_update() {
     let mut ctx = TestContext::new();
     ctx.import(TW_IMPORT_DATA).expect("import");
@@ -1192,6 +1218,122 @@ fn tw_test_import_update() {
     assert_eq!(zero.core.status, TaskStatus::Pending);
     assert_eq!(ctx.all_tasks().len(), 3, "no duplicate created");
     println!("PASS: import updates existing tasks by UUID");
+}
+
+#[test]
+fn tw_test_import_update_clears_omitted_fields() {
+    // Taskwarrior's import replaces the stored task with the imported data:
+    // any property missing from the payload is removed, not left behind.
+    // Only `entry` survives when it is omitted.
+    let mut ctx = TestContext::new();
+    let uuid = "b0000000-b000-b000-b000-b00000000000";
+    let seed = r#"[{
+        "uuid":"b0000000-b000-b000-b000-b00000000000",
+        "description":"original",
+        "status":"pending",
+        "entry":"20240101T000000Z",
+        "project":"Old",
+        "priority":"H",
+        "tags":["alpha","beta"],
+        "due":"20270101T000000Z",
+        "wait":"20260101T000000Z",
+        "scheduled":"20260201T000000Z",
+        "until":"20271231T000000Z",
+        "start":"20260115T000000Z",
+        "end":"20260101T000000Z",
+        "foo":"bar",
+        "annotations":[{"entry":"20240110T000000Z","description":"note"}],
+        "depends":["b1111111-b111-b111-b111-b11111111111"]
+    }]"#;
+    ctx.import(seed).expect("seed import");
+
+    let update = r#"[{"uuid":"b0000000-b000-b000-b000-b00000000000","description":"updated"}]"#;
+    ctx.import(update).expect("update import");
+
+    let task = ctx.get(uuid);
+    assert_eq!(task.core.description, "updated");
+    assert_eq!(task.core.project, None, "omitted project must be cleared");
+    assert_eq!(task.core.priority, None, "omitted priority must be cleared");
+    assert!(
+        user_tags(&task.core.tags).is_empty(),
+        "omitted tags must be cleared"
+    );
+    assert!(
+        task.core.depends.is_empty(),
+        "omitted depends must be cleared"
+    );
+    assert!(
+        task.core.annotations.is_empty(),
+        "omitted annotations must be cleared"
+    );
+    assert_eq!(task.core.due, None, "omitted due must be cleared");
+    assert_eq!(task.core.wait, None, "omitted wait must be cleared");
+    assert_eq!(
+        task.core.scheduled, None,
+        "omitted scheduled must be cleared"
+    );
+    assert_eq!(task.core.until, None, "omitted until must be cleared");
+    assert_eq!(task.core.start, None, "omitted start must be cleared");
+    assert_eq!(task.core.end, None, "omitted end must be cleared");
+    assert!(
+        task.core.udas.iter().all(|uda| uda.key != "foo"),
+        "omitted UDAs must be cleared"
+    );
+    assert!(
+        parse_iso8601(&task.core.entry).is_ok(),
+        "entry is preserved when omitted"
+    );
+
+    // Values that are supplied replace the old ones instead of being merged.
+    let replace = r#"[{
+        "uuid":"b0000000-b000-b000-b000-b00000000000",
+        "description":"replaced",
+        "project":"New",
+        "priority":"L",
+        "tags":["gamma"],
+        "foo":"baz",
+        "annotations":[{"entry":"20240111T000000Z","description":"note2"}],
+        "depends":["b2222222-b222-b222-b222-b22222222222"]
+    }]"#;
+    ctx.import(replace).expect("replace import");
+
+    let task = ctx.get(uuid);
+    assert_eq!(task.core.project.as_deref(), Some("New"));
+    assert_eq!(task.core.priority.as_deref(), Some("L"));
+    assert_eq!(user_tags(&task.core.tags), vec!["gamma"]);
+    assert_eq!(
+        task.core.depends,
+        vec!["b2222222-b222-b222-b222-b22222222222".to_string()]
+    );
+    assert_eq!(task.core.annotations.len(), 1);
+    assert_eq!(task.core.annotations[0].description, "note2");
+    assert!(
+        task.core
+            .udas
+            .iter()
+            .any(|uda| uda.key == "foo" && uda.value == "baz")
+    );
+}
+
+#[test]
+fn tw_test_import_update_preserves_generated_end() {
+    // Taskwarrior generates an `end` date for completed/deleted tasks, so an
+    // omitted `end` is taken from the existing task instead of being cleared.
+    let mut ctx = TestContext::new();
+    let uuid = "c0000000-c000-c000-c000-c00000000000";
+    ctx.import(&format!(
+        r#"[{{"uuid":"{uuid}","description":"done","status":"completed","entry":"20240301T000000Z","end":"20250101T000000Z"}}]"#
+    ))
+    .expect("seed import");
+
+    ctx.import(&format!(
+        r#"[{{"uuid":"{uuid}","description":"done again","status":"completed"}}]"#
+    ))
+    .expect("update import");
+
+    let task = ctx.get(uuid);
+    let end = parse_iso8601(task.core.end.as_deref().expect("end preserved")).expect("end date");
+    assert_eq!(end.to_rfc3339(), "2025-01-01T00:00:00+00:00");
 }
 
 #[test]

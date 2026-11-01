@@ -252,20 +252,8 @@ const IMPORT_FIELDS: &[&str] = &[
 /// Returns `Ok(None)` when the payload is not Taskwarrior JSON, so the caller
 /// can fall back to Taskdroid's own `TaskSnapshot` backups.
 pub fn parse_import(json: &str) -> Result<Option<Vec<TaskCore>>> {
-    let trimmed = json.trim();
-    if trimmed.is_empty() {
+    let Some(objects) = extract_objects(json)? else {
         return Ok(None);
-    }
-
-    // Unparseable input is left to the legacy path so it reports the error.
-    let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
-        return Ok(None);
-    };
-
-    let objects = match value {
-        Value::Array(items) => items,
-        Value::Object(map) => vec![Value::Object(map)],
-        _ => return Ok(None),
     };
 
     // Taskdroid's own backups wrap task data in a "core" object.
@@ -284,6 +272,51 @@ pub fn parse_import(json: &str) -> Result<Option<Vec<TaskCore>>> {
     }
 
     Ok(Some(cores))
+}
+
+/// Pull the task objects out of an import payload.
+///
+/// Taskwarrior accepts a single object, an array of objects, and - from
+/// Taskwarrior 2 and older Taskdroid versions - one object per line. The whole
+/// input is parsed first so free-form whitespace inside one task keeps working;
+/// the line-by-line reading is only a fallback, exactly like `task import`.
+fn extract_objects(json: &str) -> Result<Option<Vec<Value>>> {
+    let trimmed = json.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    match serde_json::from_str::<Value>(trimmed) {
+        Ok(Value::Array(items)) => Ok(Some(items)),
+        Ok(Value::Object(map)) => Ok(Some(vec![Value::Object(map)])),
+        // Another JSON document (a number, a bare string, ...) is not a task
+        // export, and the legacy importer should report that.
+        Ok(_) => Ok(None),
+        Err(_) => {
+            // Line-per-task exports always start with an object; anything else
+            // is a different format, and the legacy path reports the error.
+            if !trimmed.starts_with('{') {
+                return Ok(None);
+            }
+
+            let mut objects = Vec::new();
+            for line in trimmed.lines() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                match serde_json::from_str::<Value>(line) {
+                    Ok(Value::Object(map)) => objects.push(Value::Object(map)),
+                    _ => return Ok(None),
+                }
+            }
+
+            if objects.is_empty() {
+                return Ok(None);
+            }
+            Ok(Some(objects))
+        }
+    }
 }
 
 /// Convert one Taskwarrior task object into the engine's core task model.
@@ -734,6 +767,22 @@ mod tests {
         assert_eq!(cores.len(), 1);
         assert_eq!(cores[0].description, "four");
         assert_eq!(cores[0].status, TaskStatus::Pending);
+    }
+
+    #[test]
+    fn imports_line_per_task_json() {
+        // Taskwarrior 2 and older Taskdroid exports wrote one object per line
+        // instead of an array.
+        let payload = concat!(
+            "{\"uuid\":\"a0000000-a000-a000-a000-a00000000000\",\"description\":\"zero\"}\n",
+            "{\"uuid\":\"a1111111-a111-a111-a111-a11111111111\",\"description\":\"one\"}\n",
+        );
+
+        let cores = parse_import(payload).unwrap().expect("Taskwarrior JSON");
+        assert_eq!(cores.len(), 2);
+        assert_eq!(cores[0].description, "zero");
+        assert_eq!(cores[1].description, "one");
+        assert_eq!(cores[1].status, TaskStatus::Pending);
     }
 
     #[test]
