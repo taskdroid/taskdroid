@@ -777,17 +777,24 @@ impl WorkerState {
         tw_json::tasks_to_json(tasks, &self.config)
     }
 
-    fn import_tasks(&mut self, json_data: String) -> Result<usize> {
-        let snapshots: Vec<TaskSnapshot> = serde_json::from_str(&json_data)
-            .map_err(|e| TaskError::invalid_input(format!("Invalid import payload: {e}")))?;
-        let count = snapshots.len();
+    pub(crate) fn import_tasks(&mut self, json_data: String) -> Result<usize> {
+        // Taskwarrior JSON is flat; Taskdroid's own backups wrap task data in
+        // a "core" object. `parse_import` reports which one it saw.
+        let cores = match tw_json::parse_import(&json_data)? {
+            Some(cores) => cores,
+            None => serde_json::from_str::<Vec<TaskSnapshot>>(&json_data)
+                .map_err(|e| TaskError::invalid_input(format!("Invalid import payload: {e}")))?
+                .into_iter()
+                .map(|snapshot| snapshot.core)
+                .collect(),
+        };
+        let count = cores.len();
         let recurrence_limit = self.recurrence_limit();
         let replica = self.replica_mut()?;
         let mut ops = Operations::new();
         ops.push(Operation::UndoPoint);
 
-        for snapshot in snapshots {
-            let core = snapshot.core;
+        for core in cores {
             let uuid = match Uuid::from_str(&core.uuid) {
                 Ok(parsed) => parsed,
                 Err(_) => Uuid::new_v4(),
@@ -815,13 +822,23 @@ impl WorkerState {
                 })?;
                 task.set_entry(Some(entry), &mut ops)
                     .map_err(|e| TaskError::storage(format!("Failed to set entry: {e}")))?;
+            } else if task.get_entry().is_none() {
+                // Taskwarrior gives imported tasks without an entry timestamp
+                // the current time, like `task add` does.
+                task.set_entry(Some(Utc::now()), &mut ops)
+                    .map_err(|e| TaskError::storage(format!("Failed to set entry: {e}")))?;
             }
 
             let due = parse_optional_datetime(core.due.as_deref(), "due", &core.uuid)?;
             let wait = parse_optional_datetime(core.wait.as_deref(), "wait", &core.uuid)?;
             let scheduled =
                 parse_optional_datetime_string(core.scheduled.as_deref(), "scheduled", &core.uuid)?;
-            let end = parse_optional_datetime_string(core.end.as_deref(), "end", &core.uuid)?;
+            // `start` and `end` are TaskChampion timestamp properties, so they
+            // must be stored as epoch seconds rather than formatted dates.
+            let start = parse_optional_datetime(core.start.as_deref(), "start", &core.uuid)?
+                .map(|dt| dt.timestamp().to_string());
+            let end = parse_optional_datetime(core.end.as_deref(), "end", &core.uuid)?
+                .map(|dt| dt.timestamp().to_string());
             let until = parse_optional_datetime_string(core.until.as_deref(), "until", &core.uuid)?;
 
             task.set_due(due, &mut ops)
@@ -832,6 +849,8 @@ impl WorkerState {
                 .map_err(|e| TaskError::invalid_input(format!("Invalid scheduled date: {e}")))?;
             task.set_value("sched", None::<String>, &mut ops)
                 .map_err(|e| TaskError::invalid_input(format!("Invalid scheduled date: {e}")))?;
+            task.set_value("start", start, &mut ops)
+                .map_err(|e| TaskError::invalid_input(format!("Invalid start date: {e}")))?;
             task.set_value("end", end, &mut ops)
                 .map_err(|e| TaskError::invalid_input(format!("Invalid end date: {e}")))?;
             task.set_value("until", until, &mut ops)

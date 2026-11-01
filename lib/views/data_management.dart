@@ -225,7 +225,7 @@ class _DataManagementPageState extends State<DataManagementPage>
         children: [
           _buildSectionHeader(context, 'Restore & Import'),
           Text(
-            'Paste a JSON backup to restore your tasks. Existing tasks with matching IDs will be updated.',
+            'Paste a Taskwarrior JSON export or a Taskdroid backup. Tasks are matched by UUID, so importing the same file twice updates instead of duplicating.',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),

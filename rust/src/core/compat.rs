@@ -120,6 +120,11 @@ impl TestContext {
         self.state.export_tasks(include_deleted)
     }
 
+    /// `task import` - import a JSON payload, returning the imported count.
+    fn import(&mut self, json: &str) -> Result<usize> {
+        self.state.import_tasks(json.to_string())
+    }
+
     /// `task _get N.field` - fetch and inspect one task.
     fn get(&mut self, uuid: &str) -> TaskSnapshot {
         self.state
@@ -1107,6 +1112,195 @@ fn tw_test_export_is_taskwarrior_flat_json() {
     assert!(exported["urgency"].is_number(), "urgency is derived");
     assert_eq!(exported["uuid"].as_str(), Some(uuid.as_str()));
     println!("PASS: export is flat Taskwarrior JSON");
+}
+
+// ==================================================================
+// TestImport (TW: import.test.py)
+//
+// Taskwarrior JSON import: arrays, single objects, free-form whitespace,
+// comma-separated dependencies, updates by UUID, and validation errors.
+// ==================================================================
+const TW_IMPORT_DATA: &str = r#"[
+{"uuid":"a0000000-a000-a000-a000-a00000000000","description":"zero","project":"A","status":"pending","entry":"1234567889"},
+{"uuid":"a1111111-a111-a111-a111-a11111111111","description":"one","project":"B","status":"pending","entry":"1234567889"},
+{"uuid":"a2222222-a222-a222-a222-a22222222222","description":"two","status":"completed","entry":"1234524689","end":"1234524690"}
+]"#;
+
+#[test]
+fn tw_test_import_stdin() {
+    let mut ctx = TestContext::new();
+
+    let count = ctx.import(TW_IMPORT_DATA).expect("import");
+    assert_eq!(count, 3, "Imported 3 tasks");
+
+    let zero = ctx.get("a0000000-a000-a000-a000-a00000000000");
+    assert_eq!(zero.core.description, "zero");
+    assert_eq!(zero.core.project.as_deref(), Some("A"));
+    assert_eq!(zero.core.status, TaskStatus::Pending);
+    assert!(
+        parse_iso8601(&zero.core.entry).is_ok(),
+        "epoch entry accepted"
+    );
+
+    let two = ctx.get("a2222222-a222-a222-a222-a22222222222");
+    assert_eq!(two.core.status, TaskStatus::Completed);
+    assert!(two.core.end.is_some(), "completion date imported");
+    println!("PASS: import array of tasks");
+}
+
+#[test]
+fn tw_test_import_single_object() {
+    let mut ctx = TestContext::new();
+    let payload = r#"{"uuid":"44444444-4444-4444-4444-444444444444","description":"three","status":"pending","entry":"1234567889"}"#;
+
+    assert_eq!(ctx.import(payload).expect("import"), 1);
+    assert_eq!(
+        ctx.get("44444444-4444-4444-4444-444444444444")
+            .core
+            .description,
+        "three"
+    );
+    println!("PASS: import single task object");
+}
+
+#[test]
+fn tw_test_import_freeform() {
+    let mut ctx = TestContext::new();
+    let payload = "{\n\"uuid\"\n:\n\"55555555-5555-5555-5555-555555555555\"\n,\n\"description\"\n:\n\"four\"\n,\n\"status\"\n:\n\"pending\"\n}";
+
+    assert_eq!(ctx.import(payload).expect("import"), 1);
+    assert_eq!(
+        ctx.get("55555555-5555-5555-5555-555555555555")
+            .core
+            .description,
+        "four"
+    );
+    println!("PASS: import free-form JSON whitespace");
+}
+
+#[test]
+fn tw_test_import_update() {
+    let mut ctx = TestContext::new();
+    ctx.import(TW_IMPORT_DATA).expect("import");
+
+    // Taskwarrior updates existing tasks in place, keyed by UUID.
+    let update = r#"{"uuid":"a0000000-a000-a000-a000-a00000000000","description":"zero","project":"C","status":"pending"}"#;
+    assert_eq!(ctx.import(update).expect("import"), 1);
+
+    let zero = ctx.get("a0000000-a000-a000-a000-a00000000000");
+    assert_eq!(zero.core.project.as_deref(), Some("C"));
+    assert_eq!(zero.core.status, TaskStatus::Pending);
+    assert_eq!(ctx.all_tasks().len(), 3, "no duplicate created");
+    println!("PASS: import updates existing tasks by UUID");
+}
+
+#[test]
+fn tw_test_import_same_task_twice() {
+    let mut ctx = TestContext::new();
+    let payload = r#"{"uuid":"a1111111-a222-a333-a444-a55555555555","description":"data4"}"#;
+
+    ctx.import(payload).expect("first import");
+    let first = ctx.export(false).expect("export");
+    ctx.import(payload).expect("second import");
+    let second = ctx.export(false).expect("export");
+
+    assert_eq!(first, second, "re-importing the same task changes nothing");
+    println!("PASS: import same task twice");
+}
+
+#[test]
+fn tw_test_import_comma_separated_dependencies() {
+    let mut ctx = TestContext::new();
+    ctx.import(TW_IMPORT_DATA).expect("import");
+
+    let payload = r#"{"uuid":"a0000000-a000-a000-a000-a00000000000","description":"zero","depends":"a1111111-a111-a111-a111-a11111111111,a2222222-a222-a222-a222-a22222222222","status":"pending","entry":"1234567889"}"#;
+    ctx.import(payload).expect("import");
+
+    let mut depends = ctx.get("a0000000-a000-a000-a000-a00000000000").core.depends;
+    depends.sort();
+    assert_eq!(
+        depends,
+        vec![
+            "a1111111-a111-a111-a111-a11111111111".to_string(),
+            "a2222222-a222-a222-a222-a22222222222".to_string()
+        ],
+        "old-style comma-separated depends"
+    );
+    println!("PASS: import comma-separated dependencies");
+}
+
+#[test]
+fn tw_test_import_dependency_array() {
+    let mut ctx = TestContext::new();
+    ctx.import(TW_IMPORT_DATA).expect("import");
+
+    let payload = r#"{"uuid":"a0000000-a000-a000-a000-a00000000000","description":"zero","depends":["a1111111-a111-a111-a111-a11111111111"],"status":"pending","entry":"1234567889"}"#;
+    ctx.import(payload).expect("import");
+
+    assert_eq!(
+        ctx.get("a0000000-a000-a000-a000-a00000000000").core.depends,
+        vec!["a1111111-a111-a111-a111-a11111111111".to_string()]
+    );
+    println!("PASS: import dependency array");
+}
+
+#[test]
+fn tw_test_import_invalid_uuid() {
+    let mut ctx = TestContext::new();
+    let result = ctx.import(r#"{"uuid":"1","description":"bad"}"#);
+    assert!(result.is_err(), "Not a valid UUID");
+    println!("PASS: import rejects invalid UUID");
+}
+
+#[test]
+fn tw_test_import_invalid_status() {
+    let mut ctx = TestContext::new();
+    let result = ctx.import(r#"{"status":"foo","description":"bad"}"#);
+    assert!(result.is_err(), "The status 'foo' is not valid.");
+    println!("PASS: import rejects invalid status");
+}
+
+#[test]
+fn tw_test_import_empty_json() {
+    let mut ctx = TestContext::new();
+    let result = ctx.import("{}");
+    assert!(result.is_err(), "Cannot import an empty task.");
+    println!("PASS: import rejects empty task");
+}
+
+#[test]
+fn tw_test_import_export_roundtrip() {
+    // Mirror of Taskwarrior's TestImportExportRoundtrip: export, re-import the
+    // export, and verify nothing changes. `modified` is excluded because
+    // TaskChampion bumps it on every write, even when values are identical.
+    fn stable_export(json: &str) -> Vec<serde_json::Value> {
+        let mut tasks: Vec<serde_json::Value> = serde_json::from_str(json).expect("parse export");
+        for task in &mut tasks {
+            if let Some(object) = task.as_object_mut() {
+                object.remove("modified");
+            }
+        }
+        tasks
+    }
+
+    let mut ctx = TestContext::new();
+    ctx.import(TW_IMPORT_DATA).expect("import");
+
+    let first = ctx.export(false).expect("export");
+    assert_eq!(
+        first,
+        ctx.export(false).expect("export"),
+        "export is stable"
+    );
+    assert_eq!(ctx.import(&first).expect("re-import"), 3);
+    let second = ctx.export(false).expect("export");
+
+    assert_eq!(
+        stable_export(&first),
+        stable_export(&second),
+        "export → import → export is stable"
+    );
+    println!("PASS: import/export roundtrip");
 }
 
 /// Filter out taskchampion virtual tags (all-uppercase, e.g. PENDING, UNBLOCKED).

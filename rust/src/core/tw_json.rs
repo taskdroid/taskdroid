@@ -10,11 +10,12 @@
 
 use super::config::Taskrc;
 use super::error::{Result, TaskError};
+use super::models::{TaskAnnotation, TaskCore, TaskStatus, UdaPair};
 use super::utils::parse_iso8601;
 use serde_json::{Map, Number, Value, json};
 use std::str::FromStr;
 use taskchampion::{
-    Status as TcStatus, Tag, Task,
+    Status as TcStatus, Tag, Task, Uuid,
     chrono::{DateTime, Utc},
 };
 
@@ -164,10 +165,17 @@ pub fn task_to_json(task: &Task, id: i64, urgency: f32, config: &Taskrc) -> Valu
 }
 
 /// Serialize tasks as a pretty-printed Taskwarrior JSON array.
+///
+/// Tasks are ordered by UUID so repeated exports of the same data are
+/// byte-for-byte identical, which is what Taskwarrior's import/export
+/// round-trip tests rely on.
 pub fn tasks_to_json<T>(tasks: T, config: &Taskrc) -> Result<String>
 where
     T: IntoIterator<Item = (Task, f32)>,
 {
+    let mut tasks: Vec<(Task, f32)> = tasks.into_iter().collect();
+    tasks.sort_by_key(|(task, _)| task.get_uuid());
+
     let values: Vec<Value> = tasks
         .into_iter()
         .enumerate()
@@ -206,6 +214,235 @@ fn f32_number(value: f32) -> Option<Number> {
         return None;
     }
     Number::from_str(&value.to_string()).ok()
+}
+
+// ------------------------------------------------------------------
+// Import
+// ------------------------------------------------------------------
+
+/// Fields the importer maps onto `TaskCore` explicitly, so they must not also
+/// be stored as user-defined attributes.
+const IMPORT_FIELDS: &[&str] = &[
+    "uuid",
+    "id",
+    "urgency",
+    "description",
+    "status",
+    "priority",
+    "project",
+    "tags",
+    "depends",
+    "annotations",
+    "entry",
+    "modified",
+    "modification",
+    "due",
+    "wait",
+    "start",
+    "end",
+    "scheduled",
+    "sched",
+    "until",
+    "recur",
+];
+
+/// Parse a Taskwarrior JSON payload: one task object or an array of them, with
+/// arbitrary whitespace.
+///
+/// Returns `Ok(None)` when the payload is not Taskwarrior JSON, so the caller
+/// can fall back to Taskdroid's own `TaskSnapshot` backups.
+pub fn parse_import(json: &str) -> Result<Option<Vec<TaskCore>>> {
+    let trimmed = json.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    // Unparseable input is left to the legacy path so it reports the error.
+    let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
+        return Ok(None);
+    };
+
+    let objects = match value {
+        Value::Array(items) => items,
+        Value::Object(map) => vec![Value::Object(map)],
+        _ => return Ok(None),
+    };
+
+    // Taskdroid's own backups wrap task data in a "core" object.
+    if objects.iter().any(|item| item.get("core").is_some()) {
+        return Ok(None);
+    }
+
+    let mut cores = Vec::with_capacity(objects.len());
+    for object in objects {
+        let Value::Object(map) = object else {
+            return Err(TaskError::invalid_input(
+                "Invalid import payload: expected JSON objects",
+            ));
+        };
+        cores.push(import_object(&map)?);
+    }
+
+    Ok(Some(cores))
+}
+
+/// Convert one Taskwarrior task object into the engine's core task model.
+fn import_object(map: &Map<String, Value>) -> Result<TaskCore> {
+    if map.is_empty() {
+        return Err(TaskError::invalid_input("Cannot import an empty task."));
+    }
+
+    let uuid = import_string(map, "uuid")?.unwrap_or_default();
+    if !uuid.is_empty() && Uuid::from_str(&uuid).is_err() {
+        return Err(TaskError::invalid_input(format!(
+            "Not a valid UUID: {uuid}"
+        )));
+    }
+
+    let status = match import_string(map, "status")? {
+        Some(raw) => import_status(&raw)?,
+        None => TaskStatus::Pending,
+    };
+
+    let modified = import_string(map, "modified")?
+        .or(import_string(map, "modification")?)
+        .unwrap_or_default();
+
+    // Everything that is not core data is stored verbatim, which keeps
+    // Taskwarrior properties such as mask, imask, parent, and rtype alive.
+    let udas = map
+        .iter()
+        .filter(|(key, _)| !IMPORT_FIELDS.contains(&key.as_str()))
+        .filter_map(|(key, value)| {
+            import_scalar(value).map(|value| UdaPair {
+                key: key.clone(),
+                value,
+            })
+        })
+        .collect();
+
+    Ok(TaskCore {
+        uuid,
+        description: import_string(map, "description")?.unwrap_or_default(),
+        status,
+        project: import_string(map, "project")?,
+        priority: import_string(map, "priority")?,
+        tags: import_string_list(map, "tags")?,
+        entry: import_string(map, "entry")?.unwrap_or_default(),
+        modified,
+        due: import_string(map, "due")?,
+        wait: import_string(map, "wait")?,
+        start: import_string(map, "start")?,
+        end: import_string(map, "end")?,
+        scheduled: import_string(map, "scheduled")?.or(import_string(map, "sched")?),
+        until: import_string(map, "until")?,
+        depends: import_string_list(map, "depends")?,
+        recurrence: import_string(map, "recur")?,
+        annotations: import_annotations(map)?,
+        udas,
+        // `parent` and `imask` travel as UDAs above, exactly as they are stored.
+        parent_uuid: None,
+        recurrence_index: None,
+    })
+}
+
+/// Taskwarrior's status vocabulary, mapped onto TaskChampion's.
+fn import_status(raw: &str) -> Result<TaskStatus> {
+    match raw.to_ascii_lowercase().as_str() {
+        "pending" => Ok(TaskStatus::Pending),
+        // Taskwarrior has a separate waiting status; TaskChampion derives it
+        // from the `wait` attribute instead.
+        "waiting" => Ok(TaskStatus::Pending),
+        "completed" => Ok(TaskStatus::Completed),
+        "deleted" => Ok(TaskStatus::Deleted),
+        "recurring" => Ok(TaskStatus::Recurring),
+        _ => Err(TaskError::invalid_input(format!(
+            "The status '{raw}' is not valid."
+        ))),
+    }
+}
+
+fn import_scalar(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(flag) => Some(flag.to_string()),
+        _ => None,
+    }
+}
+
+fn import_string(map: &Map<String, Value>, key: &str) -> Result<Option<String>> {
+    match map.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(text)) => Ok(Some(text.clone())),
+        Some(Value::Number(number)) => Ok(Some(number.to_string())),
+        Some(other) => Err(TaskError::invalid_input(format!(
+            "Field '{key}' is malformed: {other}"
+        ))),
+    }
+}
+
+fn import_string_list(map: &Map<String, Value>, key: &str) -> Result<Vec<String>> {
+    match map.get(key) {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| {
+                import_scalar(item).ok_or_else(|| {
+                    TaskError::invalid_input(format!("Field '{key}' is malformed: {item}"))
+                })
+            })
+            .collect(),
+        // Older Taskwarrior JSON encoded tags and dependencies as one
+        // comma-separated string.
+        Some(Value::String(text)) => Ok(text
+            .split(',')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .map(String::from)
+            .collect()),
+        Some(other) => Err(TaskError::invalid_input(format!(
+            "Field '{key}' is malformed: {other}"
+        ))),
+    }
+}
+
+fn import_annotations(map: &Map<String, Value>) -> Result<Vec<TaskAnnotation>> {
+    let Some(value) = map.get("annotations") else {
+        return Ok(Vec::new());
+    };
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+    let Value::Array(items) = value else {
+        return Err(TaskError::invalid_input(format!(
+            "Annotations is malformed: {value}"
+        )));
+    };
+
+    items
+        .iter()
+        .map(|item| {
+            let Value::Object(annotation) = item else {
+                return Err(TaskError::invalid_input(format!(
+                    "Annotations is malformed: {item}"
+                )));
+            };
+            let description = annotation
+                .get("description")
+                .and_then(import_scalar)
+                .ok_or_else(|| {
+                    TaskError::invalid_input(format!("Annotations is malformed: {item}"))
+                })?;
+            Ok(TaskAnnotation {
+                entry: annotation
+                    .get("entry")
+                    .and_then(import_scalar)
+                    .unwrap_or_default(),
+                description,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -359,8 +596,9 @@ mod tests {
 
     #[test]
     fn serializes_a_taskwarrior_json_array() {
-        let first = Uuid::new_v4();
-        let second = Uuid::new_v4();
+        // Fixed UUIDs make the uuid-sorted export order deterministic.
+        let first = Uuid::from_str("11111111-1111-1111-1111-111111111111").unwrap();
+        let second = Uuid::from_str("22222222-2222-2222-2222-222222222222").unwrap();
         let mut replica = replica_with(|replica, ops| {
             for (uuid, description) in [(first, "first"), (second, "second")] {
                 let mut task = replica.create_task(uuid, ops).unwrap();
@@ -370,8 +608,8 @@ mod tests {
         });
 
         let tasks = vec![
-            (get(&mut replica, first), 0.5),
             (get(&mut replica, second), 1.5),
+            (get(&mut replica, first), 0.5),
         ];
         let json = tasks_to_json(tasks, &Taskrc::default()).expect("export");
         let values: Vec<Value> = serde_json::from_str(&json).expect("valid JSON");
@@ -379,7 +617,7 @@ mod tests {
         assert_eq!(values.len(), 2);
         assert_eq!(values[0]["id"], json!(1));
         assert_eq!(values[1]["id"], json!(2));
-        assert_eq!(values[0]["uuid"], first.to_string());
+        assert_eq!(values[0]["uuid"], first.to_string(), "sorted by uuid");
         assert_eq!(values[1]["uuid"], second.to_string());
     }
 
@@ -412,5 +650,133 @@ mod tests {
     fn formats_dates_in_taskwarrior_compact_utc() {
         let dt = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
         assert_eq!(format_tw_date(dt), "20260102T030405Z");
+    }
+
+    #[test]
+    fn imports_taskwarrior_flat_json() {
+        let uuid = "a1111111-a222-a333-a444-a55555555555";
+        let dependency = "b1111111-b222-b333-b444-b55555555555";
+        let payload = format!(
+            r#"[{{
+                "id": 1,
+                "uuid": "{uuid}",
+                "description": "Buy milk",
+                "status": "pending",
+                "project": "Home",
+                "priority": "M",
+                "entry": "20260718T123045Z",
+                "due": "20260720T123045Z",
+                "tags": ["next", "shopping"],
+                "depends": ["{dependency}"],
+                "mask": "1",
+                "imask": 1,
+                "estimate": 3,
+                "annotations": [
+                    {{"entry": "20260719T080000Z", "description": "from the shop"}}
+                ],
+                "urgency": 4.2
+            }}]"#
+        );
+
+        let cores = parse_import(&payload).unwrap().expect("Taskwarrior JSON");
+        assert_eq!(cores.len(), 1);
+        let core = &cores[0];
+        assert_eq!(core.uuid, uuid);
+        assert_eq!(core.description, "Buy milk");
+        assert_eq!(core.status, TaskStatus::Pending);
+        assert_eq!(core.project.as_deref(), Some("Home"));
+        assert_eq!(core.priority.as_deref(), Some("M"));
+        assert_eq!(core.entry, "20260718T123045Z");
+        assert_eq!(core.due.as_deref(), Some("20260720T123045Z"));
+        assert_eq!(core.tags, vec!["next", "shopping"]);
+        assert_eq!(core.depends, vec![dependency]);
+        assert_eq!(core.annotations.len(), 1);
+        assert_eq!(core.annotations[0].description, "from the shop");
+        assert!(
+            core.udas
+                .iter()
+                .any(|uda| uda.key == "mask" && uda.value == "1"),
+            "mask survives as a UDA"
+        );
+        assert!(
+            core.udas
+                .iter()
+                .any(|uda| uda.key == "imask" && uda.value == "1"),
+            "numeric imask is preserved as text"
+        );
+        assert!(
+            core.udas
+                .iter()
+                .any(|uda| uda.key == "estimate" && uda.value == "3"),
+            "numeric UDA is preserved as text"
+        );
+        assert!(
+            !core.udas.iter().any(|uda| uda.key == "urgency"),
+            "decoration fields are not stored"
+        );
+    }
+
+    #[test]
+    fn imports_single_object_with_free_form_whitespace() {
+        let payload = r#"
+            {
+            "uuid"
+            :
+                "55555555-5555-5555-5555-555555555555"
+            ,
+            "description"
+            :
+            "four"
+            }
+        "#;
+
+        let cores = parse_import(payload).unwrap().expect("Taskwarrior JSON");
+        assert_eq!(cores.len(), 1);
+        assert_eq!(cores[0].description, "four");
+        assert_eq!(cores[0].status, TaskStatus::Pending);
+    }
+
+    #[test]
+    fn imports_comma_separated_dependencies() {
+        let payload = r#"{"uuid":"a0000000-a000-a000-a000-a00000000000","description":"zero",
+            "depends":"a1111111-a111-a111-a111-a11111111111,a2222222-a222-a222-a222-a22222222222"}"#;
+
+        let cores = parse_import(payload).unwrap().expect("Taskwarrior JSON");
+        assert_eq!(
+            cores[0].depends,
+            vec![
+                "a1111111-a111-a111-a111-a11111111111",
+                "a2222222-a222-a222-a222-a22222222222"
+            ]
+        );
+    }
+
+    #[test]
+    fn import_rejects_invalid_taskwarrior_data() {
+        let invalid_uuid = parse_import(r#"{"uuid":"1","description":"bad"}"#);
+        assert!(invalid_uuid.is_err(), "invalid UUID is rejected");
+
+        let invalid_status = parse_import(r#"{"status":"foo","description":"bad"}"#);
+        assert!(invalid_status.is_err(), "invalid status is rejected");
+
+        let empty = parse_import("{}");
+        assert!(empty.is_err(), "empty task is rejected");
+
+        let malformed_annotations = parse_import(r#"{"description":"bad","annotations":"bad"}"#);
+        assert!(
+            malformed_annotations.is_err(),
+            "malformed annotations are rejected"
+        );
+    }
+
+    #[test]
+    fn ignores_taskdroid_snapshot_payloads() {
+        let payload = r#"[{"core":{"uuid":"a1111111-a222-a333-a444-a55555555555",
+            "description":"legacy"},"computed":{"urgency":0.0}}]"#;
+
+        assert!(
+            parse_import(payload).unwrap().is_none(),
+            "TaskSnapshot backups fall through to the legacy importer"
+        );
     }
 }
