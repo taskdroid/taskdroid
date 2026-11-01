@@ -79,7 +79,8 @@ class _DataManagementPageState extends State<DataManagementPage>
         children: [
           _buildSectionHeader(context, 'Backup & Export'),
           Text(
-            'Generate a JSON backup of your tasks. This file can be used to migrate your data to another device or profile.',
+            'Generate a Taskwarrior-compatible JSON backup of your tasks. '
+            'The file can be imported by Taskwarrior 3 or used to migrate your data to another device or profile.',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),

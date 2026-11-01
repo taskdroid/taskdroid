@@ -3,6 +3,7 @@ use super::error::{Result, TaskError};
 use super::models::{CreateTaskParams, TaskSnapshot, UpdateTaskParams};
 use super::query::{Pagination, Query, QueryResult, SortField, TaskFilter};
 use super::query_language::matches_query_with_config;
+use super::tw_json;
 use super::utils::{
     calculate_urgency, calculate_urgency_with_inheritance, parse_date_opt_str_strict,
     parse_date_opt_strict, parse_iso8601, task_snapshot_from_task_with_urgency,
@@ -764,17 +765,16 @@ impl WorkerState {
             .collect();
         let task_map = task_map_from_pairs(&all_tasks);
         let now = Utc::now();
-        let snapshots = all_tasks
+        let tasks = all_tasks
             .into_iter()
             .filter(|(_, task)| include_deleted || task.get_status() != TcStatus::Deleted)
             .map(|(_, task)| {
                 let urgency =
                     calculate_urgency_with_inheritance(&task, now, &self.config, &task_map);
-                task_snapshot_from_task_with_urgency(task, urgency)
+                (task, urgency)
             })
             .collect::<Vec<_>>();
-        serde_json::to_string_pretty(&snapshots)
-            .map_err(|e| TaskError::storage(format!("Failed to serialize tasks: {e}")))
+        tw_json::tasks_to_json(tasks, &self.config)
     }
 
     fn import_tasks(&mut self, json_data: String) -> Result<usize> {
@@ -2650,9 +2650,11 @@ mod tests {
         }
 
         let exported = state.export_tasks(false).expect("export should succeed");
-        let snapshots: Vec<TaskSnapshot> =
+        let tasks: Vec<serde_json::Value> =
             serde_json::from_str(&exported).expect("parse exported payload");
-        assert_eq!(snapshots.len(), 3);
+        assert_eq!(tasks.len(), 3);
+        assert!(tasks.iter().all(|task| task["status"] == "pending"));
+        assert!(tasks.iter().all(|task| task["urgency"].is_number()));
     }
 }
 

@@ -1062,12 +1062,12 @@ fn tw_test_export_description() {
     let uuid = ctx.add("test", None, None, None, None);
 
     let json = ctx.export(false).expect("export");
-    let snapshots: Vec<TaskSnapshot> = serde_json::from_str(&json).expect("parse JSON");
-    let exported = snapshots
+    let exported: Vec<serde_json::Value> = serde_json::from_str(&json).expect("parse JSON");
+    let exported = exported
         .iter()
-        .find(|t| t.core.uuid == uuid)
+        .find(|t| t["uuid"] == uuid)
         .expect("task in export");
-    assert_eq!(exported.core.description, "test");
+    assert_eq!(exported["description"].as_str(), Some("test"));
     println!("PASS: export contains description");
 }
 
@@ -1077,13 +1077,36 @@ fn tw_test_export_status() {
     let uuid = ctx.add("test", None, None, None, None);
 
     let json = ctx.export(false).expect("export");
-    let snapshots: Vec<TaskSnapshot> = serde_json::from_str(&json).expect("parse JSON");
-    let exported = snapshots
+    let exported: Vec<serde_json::Value> = serde_json::from_str(&json).expect("parse JSON");
+    let exported = exported
         .iter()
-        .find(|t| t.core.uuid == uuid)
+        .find(|t| t["uuid"] == uuid)
         .expect("task in export");
-    assert_eq!(exported.core.status, TaskStatus::Pending);
+    assert_eq!(exported["status"].as_str(), Some("pending"));
     println!("PASS: export contains pending status");
+}
+
+#[test]
+fn tw_test_export_is_taskwarrior_flat_json() {
+    let mut ctx = TestContext::new();
+    let uuid = ctx.add("test", None, None, None, None);
+
+    let json = ctx.export(false).expect("export");
+    let exported: Vec<serde_json::Value> = serde_json::from_str(&json).expect("parse JSON");
+    let exported = exported
+        .iter()
+        .find(|t| t["uuid"] == uuid)
+        .expect("task in export");
+
+    assert!(exported.get("core").is_none(), "no TaskSnapshot wrapper");
+    assert!(
+        exported.get("computed").is_none(),
+        "no TaskSnapshot wrapper"
+    );
+    assert!(exported["id"].is_number(), "id is derived");
+    assert!(exported["urgency"].is_number(), "urgency is derived");
+    assert_eq!(exported["uuid"].as_str(), Some(uuid.as_str()));
+    println!("PASS: export is flat Taskwarrior JSON");
 }
 
 /// Filter out taskchampion virtual tags (all-uppercase, e.g. PENDING, UNBLOCKED).
