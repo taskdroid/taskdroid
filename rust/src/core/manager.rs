@@ -3,6 +3,7 @@ use super::error::{Result, TaskError};
 use super::models::{CreateTaskParams, TaskSnapshot, UpdateTaskParams};
 use super::query::{Pagination, Query, QueryResult, SortField, TaskFilter};
 use super::query_language::matches_query_with_config;
+use super::tw_json;
 use super::utils::{
     calculate_urgency, calculate_urgency_with_inheritance, parse_date_opt_str_strict,
     parse_date_opt_strict, parse_iso8601, task_snapshot_from_task_with_urgency,
@@ -764,30 +765,36 @@ impl WorkerState {
             .collect();
         let task_map = task_map_from_pairs(&all_tasks);
         let now = Utc::now();
-        let snapshots = all_tasks
+        let tasks = all_tasks
             .into_iter()
             .filter(|(_, task)| include_deleted || task.get_status() != TcStatus::Deleted)
             .map(|(_, task)| {
                 let urgency =
                     calculate_urgency_with_inheritance(&task, now, &self.config, &task_map);
-                task_snapshot_from_task_with_urgency(task, urgency)
+                (task, urgency)
             })
             .collect::<Vec<_>>();
-        serde_json::to_string_pretty(&snapshots)
-            .map_err(|e| TaskError::storage(format!("Failed to serialize tasks: {e}")))
+        tw_json::tasks_to_json(tasks, &self.config)
     }
 
-    fn import_tasks(&mut self, json_data: String) -> Result<usize> {
-        let snapshots: Vec<TaskSnapshot> = serde_json::from_str(&json_data)
-            .map_err(|e| TaskError::invalid_input(format!("Invalid import payload: {e}")))?;
-        let count = snapshots.len();
+    pub(crate) fn import_tasks(&mut self, json_data: String) -> Result<usize> {
+        // Taskwarrior JSON is flat; Taskdroid's own backups wrap task data in
+        // a "core" object. `parse_import` reports which one it saw.
+        let cores = match tw_json::parse_import(&json_data)? {
+            Some(cores) => cores,
+            None => serde_json::from_str::<Vec<TaskSnapshot>>(&json_data)
+                .map_err(|e| TaskError::invalid_input(format!("Invalid import payload: {e}")))?
+                .into_iter()
+                .map(|snapshot| snapshot.core)
+                .collect(),
+        };
+        let count = cores.len();
         let recurrence_limit = self.recurrence_limit();
         let replica = self.replica_mut()?;
         let mut ops = Operations::new();
         ops.push(Operation::UndoPoint);
 
-        for snapshot in snapshots {
-            let core = snapshot.core;
+        for core in cores {
             let uuid = match Uuid::from_str(&core.uuid) {
                 Ok(parsed) => parsed,
                 Err(_) => Uuid::new_v4(),
@@ -802,6 +809,20 @@ impl WorkerState {
                 })?,
             };
 
+            let project = core.project.filter(|value| !value.is_empty());
+            let priority = core.priority.filter(|value| !value.is_empty());
+            let due = parse_optional_datetime(core.due.as_deref(), "due", &core.uuid)?;
+            let wait = parse_optional_datetime(core.wait.as_deref(), "wait", &core.uuid)?;
+            let scheduled =
+                parse_optional_datetime_string(core.scheduled.as_deref(), "scheduled", &core.uuid)?;
+            // `start` and `end` are TaskChampion timestamp properties, so they
+            // must be stored as epoch seconds rather than formatted dates.
+            let start = parse_optional_datetime(core.start.as_deref(), "start", &core.uuid)?
+                .map(|dt| dt.timestamp().to_string());
+            let end = parse_optional_datetime(core.end.as_deref(), "end", &core.uuid)?
+                .map(|dt| dt.timestamp().to_string());
+            let until = parse_optional_datetime_string(core.until.as_deref(), "until", &core.uuid)?;
+
             task.set_description(core.description, &mut ops)
                 .map_err(|e| TaskError::invalid_input(format!("Invalid description: {e}")))?;
             task.set_status(core.status.into(), &mut ops)
@@ -815,14 +836,46 @@ impl WorkerState {
                 })?;
                 task.set_entry(Some(entry), &mut ops)
                     .map_err(|e| TaskError::storage(format!("Failed to set entry: {e}")))?;
+            } else if task.get_entry().is_none() {
+                // Taskwarrior gives imported tasks without an entry timestamp
+                // the current time, like `task add` does.
+                task.set_entry(Some(Utc::now()), &mut ops)
+                    .map_err(|e| TaskError::storage(format!("Failed to set entry: {e}")))?;
             }
 
-            let due = parse_optional_datetime(core.due.as_deref(), "due", &core.uuid)?;
-            let wait = parse_optional_datetime(core.wait.as_deref(), "wait", &core.uuid)?;
-            let scheduled =
-                parse_optional_datetime_string(core.scheduled.as_deref(), "scheduled", &core.uuid)?;
-            let end = parse_optional_datetime_string(core.end.as_deref(), "end", &core.uuid)?;
-            let until = parse_optional_datetime_string(core.until.as_deref(), "until", &core.uuid)?;
+            // Taskwarrior's import replaces the stored task with the imported
+            // one: properties absent from the payload are cleared rather than
+            // kept. TaskChampion stores project, recur, scheduled, until, and
+            // other Taskwarrior properties as user-defined attributes, so
+            // remove the old ones the payload does not set.
+            let mut imported_properties: HashSet<String> =
+                core.udas.iter().map(|uda| uda.key.clone()).collect();
+            for (key, imported) in [
+                ("project", project.is_some()),
+                ("scheduled", scheduled.is_some()),
+                ("until", until.is_some()),
+                ("recur", core.recurrence.is_some()),
+                // Taskdroid backups store the recurring-series linkage in
+                // separate fields instead of `parent`/`imask` UDAs.
+                ("parent", core.parent_uuid.is_some()),
+                ("imask", core.recurrence_index.is_some()),
+            ] {
+                if imported {
+                    imported_properties.insert(key.to_string());
+                }
+            }
+            let existing_properties: Vec<String> = task
+                .get_user_defined_attributes()
+                .map(|(key, _)| key.to_string())
+                .collect();
+            for key in existing_properties {
+                if !imported_properties.contains(&key) {
+                    task.remove_user_defined_attribute(key, &mut ops)
+                        .map_err(|e| {
+                            TaskError::storage(format!("Failed to clear imported property: {e}"))
+                        })?;
+                }
+            }
 
             task.set_due(due, &mut ops)
                 .map_err(|e| TaskError::invalid_input(format!("Invalid due date: {e}")))?;
@@ -832,26 +885,42 @@ impl WorkerState {
                 .map_err(|e| TaskError::invalid_input(format!("Invalid scheduled date: {e}")))?;
             task.set_value("sched", None::<String>, &mut ops)
                 .map_err(|e| TaskError::invalid_input(format!("Invalid scheduled date: {e}")))?;
-            task.set_value("end", end, &mut ops)
-                .map_err(|e| TaskError::invalid_input(format!("Invalid end date: {e}")))?;
+            task.set_value("start", start, &mut ops)
+                .map_err(|e| TaskError::invalid_input(format!("Invalid start date: {e}")))?;
+            // Taskwarrior preserves an existing `end` when it is omitted from
+            // an import that leaves the task completed or deleted, because
+            // those statuses generate an end date. It is cleared otherwise.
+            if end.is_some() {
+                task.set_value("end", end, &mut ops)
+                    .map_err(|e| TaskError::invalid_input(format!("Invalid end date: {e}")))?;
+            } else if matches!(
+                core.status,
+                super::models::TaskStatus::Completed | super::models::TaskStatus::Deleted
+            ) {
+                if task.get_value("end").is_none() {
+                    task.set_value("end", Some(Utc::now().timestamp().to_string()), &mut ops)
+                        .map_err(|e| TaskError::invalid_input(format!("Invalid end date: {e}")))?;
+                }
+            } else {
+                task.set_value("end", None::<String>, &mut ops)
+                    .map_err(|e| TaskError::invalid_input(format!("Invalid end date: {e}")))?;
+            }
             task.set_value("until", until, &mut ops)
                 .map_err(|e| TaskError::invalid_input(format!("Invalid until date: {e}")))?;
             task.set_value("recur", core.recurrence, &mut ops)
                 .map_err(|e| TaskError::invalid_input(format!("Invalid recurrence: {e}")))?;
 
-            if let Some(project) = core.project {
-                task.set_value("project", Some(project), &mut ops)
-                    .map_err(|e| TaskError::invalid_input(format!("Invalid project: {e}")))?;
-            }
-            if let Some(priority) = core.priority {
-                task.set_priority(priority, &mut ops)
-                    .map_err(|e| TaskError::invalid_input(format!("Invalid priority: {e}")))?;
-            }
-            if let Some(start_val) = &core.start {
-                task.set_value("start", Some(start_val.clone()), &mut ops)
-                    .map_err(|e| {
-                        TaskError::conflict(format!("Failed to activate imported task: {e}"))
-                    })?;
+            task.set_value("project", project, &mut ops)
+                .map_err(|e| TaskError::invalid_input(format!("Invalid project: {e}")))?;
+            task.set_value("priority", priority, &mut ops)
+                .map_err(|e| TaskError::invalid_input(format!("Invalid priority: {e}")))?;
+
+            // Tags, dependencies, and annotations are replaced, not merged.
+            let existing_tags: Vec<Tag> = task.get_tags().filter(Tag::is_user).collect();
+            for tag in existing_tags {
+                task.remove_tag(&tag, &mut ops).map_err(|e| {
+                    TaskError::storage(format!("Failed to clear imported tag: {e}"))
+                })?;
             }
             for tag in core.tags {
                 match Tag::from_str(&tag) {
@@ -865,6 +934,13 @@ impl WorkerState {
                     }
                 }
             }
+
+            let existing_dependencies: Vec<Uuid> = task.get_dependencies().collect();
+            for dependency in existing_dependencies {
+                task.remove_dependency(dependency, &mut ops).map_err(|e| {
+                    TaskError::storage(format!("Failed to clear imported dependency: {e}"))
+                })?;
+            }
             for dependency in core.depends {
                 match Uuid::from_str(&dependency) {
                     Ok(parsed) => {
@@ -877,9 +953,15 @@ impl WorkerState {
                     }
                 }
             }
-            for uda in core.udas {
-                task.set_user_defined_attribute(uda.key, uda.value, &mut ops)
-                    .map_err(|e| TaskError::invalid_input(format!("Invalid UDA: {e}")))?;
+
+            let existing_annotations: Vec<_> = task
+                .get_annotations()
+                .map(|annotation| annotation.entry)
+                .collect();
+            for entry in existing_annotations {
+                task.remove_annotation(entry, &mut ops).map_err(|e| {
+                    TaskError::storage(format!("Failed to clear imported annotation: {e}"))
+                })?;
             }
             for annotation in core.annotations {
                 if let Ok(entry) = parse_iso8601(&annotation.entry) {
@@ -896,6 +978,19 @@ impl WorkerState {
                 } else {
                     warn!(command = "import_tasks", entry = %annotation.entry, "ignored invalid annotation entry");
                 }
+            }
+
+            for uda in core.udas {
+                task.set_user_defined_attribute(uda.key, uda.value, &mut ops)
+                    .map_err(|e| TaskError::invalid_input(format!("Invalid UDA: {e}")))?;
+            }
+            if let Some(parent) = core.parent_uuid {
+                task.set_value("parent", Some(parent), &mut ops)
+                    .map_err(|e| TaskError::invalid_input(format!("Invalid parent: {e}")))?;
+            }
+            if let Some(index) = core.recurrence_index {
+                task.set_value("imask", Some(index.to_string()), &mut ops)
+                    .map_err(|e| TaskError::invalid_input(format!("Invalid imask: {e}")))?;
             }
         }
 
@@ -2650,9 +2745,11 @@ mod tests {
         }
 
         let exported = state.export_tasks(false).expect("export should succeed");
-        let snapshots: Vec<TaskSnapshot> =
+        let tasks: Vec<serde_json::Value> =
             serde_json::from_str(&exported).expect("parse exported payload");
-        assert_eq!(snapshots.len(), 3);
+        assert_eq!(tasks.len(), 3);
+        assert!(tasks.iter().all(|task| task["status"] == "pending"));
+        assert!(tasks.iter().all(|task| task["urgency"].is_number()));
     }
 }
 

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:taskdroid/providers/task_state.dart';
+import 'package:taskdroid/services/backup_file_io.dart';
 import 'package:taskdroid/widgets/app_drawer.dart';
 
 class DataManagementPage extends StatefulWidget {
@@ -78,7 +79,8 @@ class _DataManagementPageState extends State<DataManagementPage>
         children: [
           _buildSectionHeader(context, 'Backup & Export'),
           Text(
-            'Generate a JSON backup of your tasks. This file can be used to migrate your data to another device or profile.',
+            'Generate a Taskwarrior-compatible JSON backup of your tasks. '
+            'The file can be imported by Taskwarrior 3 or used to migrate your data to another device or profile.',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
@@ -123,6 +125,21 @@ class _DataManagementPageState extends State<DataManagementPage>
                   : const Icon(Icons.analytics_outlined),
               label: Text(
                 taskState.isLoading ? 'Processing...' : 'Generate Backup JSON',
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            height: 54,
+            child: FilledButton.tonalIcon(
+              onPressed: taskState.isLoading
+                  ? null
+                  : () => _performExportToFile(context, taskState),
+              icon: const Icon(Icons.save_alt_rounded),
+              label: Text(
+                taskState.isLoading ? 'Processing...' : 'Save Backup to File',
               ),
             ),
           ),
@@ -208,7 +225,7 @@ class _DataManagementPageState extends State<DataManagementPage>
         children: [
           _buildSectionHeader(context, 'Restore & Import'),
           Text(
-            'Paste a JSON backup to restore your tasks. Existing tasks with matching IDs will be updated.',
+            'Paste a Taskwarrior JSON export or a Taskdroid backup. Tasks are matched by UUID, so importing the same file twice updates instead of duplicating.',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
@@ -238,22 +255,42 @@ class _DataManagementPageState extends State<DataManagementPage>
                   style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
                 ),
                 const SizedBox(height: 12),
-                Row(
-                  children: [
-                    const Spacer(),
-                    TextButton.icon(
-                      onPressed: () async {
-                        final data = await Clipboard.getData(
-                          Clipboard.kTextPlain,
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      try {
+                        final json = await pickBackupFile();
+                        if (!mounted || json == null) return;
+                        _importController.text = json;
+                      } on Exception {
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Failed to read the selected file'),
+                          ),
                         );
-                        if (data?.text != null) {
-                          _importController.text = data!.text!;
-                        }
-                      },
-                      icon: const Icon(Icons.paste_rounded),
-                      label: const Text('Paste from Clipboard'),
-                    ),
-                  ],
+                      }
+                    },
+                    icon: const Icon(Icons.folder_open_rounded),
+                    label: const Text('Pick JSON File'),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      final data = await Clipboard.getData(
+                        Clipboard.kTextPlain,
+                      );
+                      if (data?.text != null) {
+                        _importController.text = data!.text!;
+                      }
+                    },
+                    icon: const Icon(Icons.paste_rounded),
+                    label: const Text('Paste from Clipboard'),
+                  ),
                 ),
               ],
             ),
@@ -283,8 +320,54 @@ class _DataManagementPageState extends State<DataManagementPage>
   }
 
   Future<void> _performExport(BuildContext context, TaskState taskState) async {
-    final count = await taskState.getTotalTaskCount();
+    final result = await _generateExport(context, taskState);
+    if (!mounted || result == null) return;
+    setState(() => _exportResult = result);
+  }
+
+  Future<void> _performExportToFile(
+    BuildContext context,
+    TaskState taskState,
+  ) async {
+    final result = await _generateExport(context, taskState);
+    if (!mounted || result == null) return;
+
+    final now = DateTime.now();
+    final date =
+        '${now.year}-'
+        '${now.month.toString().padLeft(2, '0')}-'
+        '${now.day.toString().padLeft(2, '0')}';
+
+    final saved = await saveBackupFile(
+      result,
+      suggestedName: 'taskdroid-backup-$date.json',
+    );
     if (!context.mounted) return;
+
+    final message = switch (saved) {
+      true => 'Backup saved to file',
+      false => 'Failed to save backup',
+      null => 'Save cancelled',
+    };
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: switch (saved) {
+          true => Colors.green,
+          false => Colors.red,
+          null => null,
+        },
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Future<String?> _generateExport(
+    BuildContext context,
+    TaskState taskState,
+  ) async {
+    final count = await taskState.getTotalTaskCount();
+    if (!context.mounted) return null;
 
     if (count > 500) {
       final confirm = await showDialog<bool>(
@@ -306,10 +389,10 @@ class _DataManagementPageState extends State<DataManagementPage>
           ],
         ),
       );
-      if (confirm != true) return;
+      if (confirm != true) return null;
     }
 
-    if (!context.mounted) return;
+    if (!context.mounted) return null;
 
     final snackBar = ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
@@ -329,12 +412,7 @@ class _DataManagementPageState extends State<DataManagementPage>
     );
 
     try {
-      final result = await taskState.exportData(
-        includeDeleted: _includeDeleted,
-      );
-      if (mounted) {
-        setState(() => _exportResult = result);
-      }
+      return await taskState.exportData(includeDeleted: _includeDeleted);
     } finally {
       snackBar.close();
     }

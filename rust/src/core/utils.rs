@@ -133,8 +133,12 @@ pub fn parse_iso8601(date_str: &str) -> Result<DateTime<Utc>> {
     if let Ok(dt) = DateTime::parse_from_rfc3339(date_str) {
         return Ok(dt.with_timezone(&Utc));
     }
-    if let Ok(dt) = DateTime::parse_from_str(date_str, "%Y%m%dT%H%M%SZ") {
-        return Ok(dt.with_timezone(&Utc));
+    // Taskwarrior's compact UTC form, e.g. 20260718T123045Z. chrono cannot
+    // parse this as a DateTime (there is no numeric offset), but the trailing
+    // Z pins it to UTC.
+    if let Ok(dt) = taskchampion::chrono::NaiveDateTime::parse_from_str(date_str, "%Y%m%dT%H%M%SZ")
+    {
+        return Ok(DateTime::from_naive_utc_and_offset(dt, Utc));
     }
     if let Ok(dt) = taskchampion::chrono::NaiveDateTime::parse_from_str(date_str, "%Y%m%dT%H%M%S") {
         return Ok(DateTime::from_naive_utc_and_offset(dt, Utc));
@@ -425,6 +429,20 @@ mod tests {
         Operations, Replica, Status as TcStatus, StorageConfig, Uuid,
         chrono::{Duration, TimeZone},
     };
+
+    #[test]
+    fn parses_taskwarrior_compact_utc_dates() {
+        let parsed = parse_iso8601("20260718T123045Z").expect("compact Taskwarrior date");
+        assert_eq!(
+            parsed,
+            Utc.with_ymd_and_hms(2026, 7, 18, 12, 30, 45).unwrap()
+        );
+        assert_eq!(
+            format_iso8601(parsed),
+            "2026-07-18T12:30:45+00:00",
+            "normalized to RFC 3339"
+        );
+    }
 
     fn blank_urgency_config() -> Taskrc {
         let mut config = Taskrc::default();

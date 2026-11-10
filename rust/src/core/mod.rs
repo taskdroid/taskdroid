@@ -4,6 +4,7 @@ pub mod manager;
 pub mod models;
 pub mod query;
 mod query_language;
+mod tw_json;
 pub mod utils;
 
 #[cfg(test)]
