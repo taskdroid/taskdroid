@@ -35,6 +35,9 @@ jobs:
       - name: Install Flutter dependencies
         run: flutter pub get
 
+      - name: Generate app version file
+        run: dart run tool/generate_version.dart
+
       - name: Analyze Flutter code
         run: flutter analyze
 
