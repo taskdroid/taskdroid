@@ -5,6 +5,7 @@ pub mod models;
 pub mod query;
 mod query_language;
 pub(crate) mod tls;
+mod tw_json;
 pub mod utils;
 
 #[cfg(test)]

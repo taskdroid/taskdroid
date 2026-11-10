@@ -4,16 +4,28 @@
 
 ### Added
 
-- Opt-in "Trust user CA certificates" setting for CAs installed through
-  Android Settings; user-installed CAs are not trusted by default
-- "Test Server" connection check now runs through Rust and uses the same TLS
-  trust store as sync
+- Taskwarrior-compatible JSON import and export, including import from a local
+  JSON file and export to a file. Imports support Taskwarrior 3 JSON as well as
+  Taskdroid backups, and update matching tasks by UUID.
+- Per-profile calendar selection and reminder settings for calendar sync.
+- Calendar sync for tasks with due, scheduled, or wait dates, plus sync status
+  in task details.
+- Opt-in trust for user-installed Android CA certificates.
+- "Test Server" now uses Rust's TLS client and the same trust store as sync.
+
+### Changed
+
+- Importing a task with an existing UUID now replaces omitted Taskwarrior fields
+  instead of keeping stale values.
+- Rust bridge packaging is limited to Android targets; generated bindings and
+  dependency metadata were refreshed.
 
 ### Fixed
 
-- Sync now uses Android's certificate store, fixing HTTPS sync with private
-  CAs installed via Settings or in the system trust store; CAs disabled in
-  Settings are no longer trusted (closes #19)
+- Calendar sync handles missing event end times and checks both calendar read
+  and write permissions, avoiding accidental removal of otherwise valid events.
+- HTTPS sync uses Android's certificate store and respects system CAs disabled
+  in Settings (closes #19).
 
 ## [0.2.1] - 2026-07-27
 
@@ -120,6 +132,7 @@
 - `TestContext` wrapper for CLI-like ergonomics; known gaps print info instead of failing
 - Update CI workflow actions
 
+[Unreleased]: https://github.com/taskdroid/taskdroid/compare/v0.2.1...master
 [0.2.1]: https://github.com/taskdroid/taskdroid/releases/tag/v0.2.1
 [0.2.0]: https://github.com/taskdroid/taskdroid/releases/tag/v0.2.0
 [0.1.0]: https://github.com/taskdroid/taskdroid/releases/tag/v0.1.0
