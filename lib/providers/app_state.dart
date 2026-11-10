@@ -8,12 +8,16 @@ class AppState extends ChangeNotifier {
   static const String _keySyncOnStart = 'sync_on_start';
   static const String _keyLeftSwipe = 'left_swipe_action';
   static const String _keyRightSwipe = 'right_swipe_action';
+  static const String trustUserCertsKey = 'trust_user_certs';
 
   bool _isDarkTheme = false;
   bool get isDarkTheme => _isDarkTheme;
 
   bool _syncOnStart = false;
   bool get syncOnStart => _syncOnStart;
+
+  bool _trustUserCerts = false;
+  bool get trustUserCerts => _trustUserCerts;
 
   bool _isLoaded = false;
   bool get isLoaded => _isLoaded;
@@ -32,6 +36,7 @@ class AppState extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     _isDarkTheme = prefs.getBool(_keyDarkTheme) ?? false;
     _syncOnStart = prefs.getBool(_keySyncOnStart) ?? false;
+    _trustUserCerts = prefs.getBool(trustUserCertsKey) ?? false;
 
     final leftSwipeIdx =
         prefs.getInt(_keyLeftSwipe) ?? SwipeAction.markDone.index;
@@ -63,6 +68,13 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keySyncOnStart, value);
+  }
+
+  Future<void> setTrustUserCerts(bool value) async {
+    _trustUserCerts = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(trustUserCertsKey, value);
   }
 
   Future<void> setLeftSwipeAction(SwipeAction action) async {

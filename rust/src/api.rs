@@ -4,6 +4,82 @@ use crate::core::{
 use anyhow::{Result, anyhow};
 use flutter_rust_bridge::frb;
 use serde::{Deserialize, Serialize};
+use std::error::Error as StdError;
+use std::time::Duration;
+
+/// Configures the process-wide HTTPS trust store
+///
+/// `trust_user_certs` adds CAs installed through Android Settings to the
+/// system trust store. it must be called before any HTTPS request
+#[frb(sync)]
+pub fn configure_tls(trust_user_certs: bool) {
+    crate::core::tls::configure(trust_user_certs);
+}
+
+/// result of connectivity check
+#[derive(Debug, Clone)]
+pub struct ServerTestResult {
+    pub success: bool,
+    pub message: String,
+}
+
+/// Checks that `url` points at a reachable TaskChampion sync server
+///
+/// this intentionally uses ureq with the same native certificate store as the
+/// sync client, so a server trusted by sync is also trusted here
+pub async fn test_server(url: String) -> Result<ServerTestResult> {
+    crate::core::tls::ensure_init();
+
+    let response = ureq::get(&url).timeout(Duration::from_secs(10)).call();
+
+    match response {
+        Ok(response) => {
+            let status = response.status();
+            let body = match response.into_string() {
+                Ok(body) => body,
+                Err(error) => {
+                    return Ok(ServerTestResult {
+                        success: false,
+                        message: format!("Error: Connection failed: {error}"),
+                    });
+                }
+            };
+            if status == 200 && body.contains("TaskChampion sync server") {
+                Ok(ServerTestResult {
+                    success: true,
+                    message: "Success: TaskChampion server verified".to_string(),
+                })
+            } else {
+                Ok(ServerTestResult {
+                    success: false,
+                    message: format!("Error: Not a valid sync server (HTTP {status})"),
+                })
+            }
+        }
+        Err(ureq::Error::Status(status, _)) => Ok(ServerTestResult {
+            success: false,
+            message: format!("Error: Not a valid sync server (HTTP {status})"),
+        }),
+        Err(error) => Ok(ServerTestResult {
+            success: false,
+            message: format!("Error: Connection failed: {}", error_chain(&error)),
+        }),
+    }
+}
+
+fn error_chain(error: &(dyn StdError + 'static)) -> String {
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let cause_message = cause.to_string();
+        if !message.contains(&cause_message) {
+            message.push_str(": ");
+            message.push_str(&cause_message);
+        }
+        source = cause.source();
+    }
+    message
+}
 
 /// FRB-facing task status enum
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

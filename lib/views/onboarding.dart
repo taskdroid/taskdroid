@@ -4,8 +4,8 @@ import 'package:taskdroid/models/profile.dart';
 import 'package:taskdroid/providers/app_state.dart';
 import 'package:taskdroid/providers/profile_state.dart';
 import 'package:taskdroid/services/calendar_service.dart';
+import 'package:taskdroid/src/rust/api.dart';
 import 'package:uuid/uuid.dart';
-import 'package:http/http.dart' as http;
 
 class OnboardingPage extends StatefulWidget {
   final VoidCallback onComplete;
@@ -40,6 +40,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
   final _uuidController = TextEditingController();
   final _secretController = TextEditingController();
   bool _testingServer = false;
+  bool _serverTestSuccess = false;
   String? _serverTestResult;
 
   @override
@@ -134,42 +135,32 @@ class _OnboardingPageState extends State<OnboardingPage> {
   Future<void> _testServer() async {
     final url = _serverUrlController.text.trim();
     if (url.isEmpty) {
-      setState(() => _serverTestResult = 'Please enter a server URL');
+      setState(() {
+        _serverTestSuccess = false;
+        _serverTestResult = 'Please enter a server URL';
+      });
       return;
     }
 
     setState(() {
       _testingServer = true;
+      _serverTestSuccess = false;
       _serverTestResult = null;
     });
 
     try {
-      final uri = Uri.parse(url);
-      final response = await http.get(uri);
-
+      final result = await testServer(url: url);
       if (!mounted) return;
-
-      if (response.statusCode == 200 &&
-          response.body.contains('TaskChampion sync server')) {
-        setState(() {
-          _serverTestResult = 'Server verified successfully';
-          _testingServer = false;
-        });
-      } else if (response.statusCode == 200) {
-        setState(() {
-          _serverTestResult = 'Not a TaskChampion sync server';
-          _testingServer = false;
-        });
-      } else {
-        setState(() {
-          _serverTestResult = 'HTTP ${response.statusCode}';
-          _testingServer = false;
-        });
-      }
+      setState(() {
+        _serverTestSuccess = result.success;
+        _serverTestResult = result.message;
+        _testingServer = false;
+      });
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _serverTestResult = 'Connection failed';
+        _serverTestSuccess = false;
+        _serverTestResult = 'Error: Connection failed: $e';
         _testingServer = false;
       });
     }
@@ -714,14 +705,38 @@ class _OnboardingPageState extends State<OnboardingPage> {
               if (_serverTestResult != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 16),
-                  child: Text(
-                    _serverTestResult!,
-                    style: TextStyle(
-                      color: _serverTestResult!.contains('success')
-                          ? Colors.green
-                          : theme.colorScheme.error,
-                      fontWeight: FontWeight.w600,
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _serverTestResult!,
+                        style: TextStyle(
+                          color: _serverTestSuccess
+                              ? Colors.green
+                              : theme.colorScheme.error,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      if (!_serverTestSuccess &&
+                          (_serverTestResult!.toLowerCase().contains(
+                                'certificate',
+                              ) ||
+                              _serverTestResult!.toLowerCase().contains(
+                                'unknownissuer',
+                              )))
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text(
+                            'Using a private CA? Install it in Android Settings, '
+                            'then enable "Trust user CA certificates" in '
+                            'Taskdroid Settings and restart.',
+                            style: TextStyle(
+                              color: theme.colorScheme.onSurfaceVariant,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
             ],

@@ -10,6 +10,8 @@
 - Per-profile calendar selection and reminder settings for calendar sync.
 - Calendar sync for tasks with due, scheduled, or wait dates, plus sync status
   in task details.
+- Opt-in trust for user-installed Android CA certificates.
+- "Test Server" now uses Rust's TLS client and the same trust store as sync.
 
 ### Changed
 
@@ -22,6 +24,8 @@
 
 - Calendar sync handles missing event end times and checks both calendar read
   and write permissions, avoiding accidental removal of otherwise valid events.
+- HTTPS sync uses Android's certificate store and respects system CAs disabled
+  in Settings (closes #19).
 
 ## [0.2.1] - 2026-07-27
 

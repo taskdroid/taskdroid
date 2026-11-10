@@ -182,6 +182,27 @@ class _SettingsPageState extends State<SettingsPage> {
 
           const SizedBox(height: 24),
 
+          _buildSectionHeader(context, 'Security'),
+          _buildSettingGroup(
+            context,
+            children: [
+              SwitchListTile(
+                secondary: const Icon(Icons.security_outlined),
+                title: const Text(
+                  'Trust user CA certificates',
+                  style: TextStyle(fontWeight: FontWeight.w500),
+                ),
+                subtitle: const Text(
+                  'Use CAs installed through Android Settings.',
+                ),
+                value: appState.trustUserCerts,
+                onChanged: (value) => _handleTrustUserCerts(context, value),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 24),
+
           _buildSectionHeader(context, 'Storage'),
           _buildStorageSection(context),
 
@@ -210,6 +231,51 @@ class _SettingsPageState extends State<SettingsPage> {
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  Future<void> _handleTrustUserCerts(BuildContext context, bool value) async {
+    if (value) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Trust user certificates?'),
+          content: const Text(
+            'Only enable this if you installed the certificate yourself. '
+            'User-installed CAs can be used to intercept HTTPS traffic.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Enable'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !context.mounted) return;
+    }
+
+    await context.read<AppState>().setTrustUserCerts(value);
+    if (!context.mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text(
+          'Taskdroid will close to apply the certificate trust change. '
+          'Reopen it to continue.',
+        ),
+        duration: const Duration(seconds: 8),
+        action: SnackBarAction(
+          // ureq caches its roots for the lifetime of the process, so closing
+          // the activity is not enough; the process itself must exit.
+          label: 'Close',
+          onPressed: () => exit(0),
+        ),
       ),
     );
   }

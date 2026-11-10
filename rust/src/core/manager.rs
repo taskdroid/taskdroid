@@ -2893,6 +2893,7 @@ pub struct TaskManager {
 impl TaskManager {
     /// creates a new engine handle
     pub fn new() -> Self {
+        super::tls::ensure_init();
         let (sender, receiver) = mpsc::channel(WORKER_QUEUE_CAPACITY);
         let worker = thread::Builder::new()
             .name("taskdroid-task-worker".to_string())
