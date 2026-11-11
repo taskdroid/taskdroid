@@ -994,6 +994,19 @@ class _SearchAndFiltersRowState extends State<TaskSearchAndFiltersRow> {
     widget.onSearchChanged(suggestion);
   }
 
+  Future<void> _showSyntaxHelp(BuildContext context) async {
+    final example = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) => _SearchSyntaxSheet(examples: _queryExamples),
+    );
+    if (example != null && mounted) _applyExample(example);
+  }
+
   void _applySuggestion(TaskQuerySuggestion suggestion) {
     final completion = TaskQueryAutocomplete.applySuggestionToValue(
       value: _searchController.value,
@@ -1106,7 +1119,48 @@ class _SearchAndFiltersRowState extends State<TaskSearchAndFiltersRow> {
             onChanged: widget.onSearchChanged,
             decoration: InputDecoration(
               hintText: 'Search tasks...',
-              prefixIcon: const Icon(Icons.search),
+              prefixIcon: Tooltip(
+                message: 'Search syntax',
+                child: InkWell(
+                  onTap: () => _showSyntaxHelp(context),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                    child: SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          const Icon(Icons.search, size: 24),
+                          Positioned(
+                            left: -5,
+                            bottom: -5,
+                            child: Container(
+                              padding: const EdgeInsets.all(1),
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: theme.colorScheme.surface,
+                              ),
+                              child: Icon(
+                                Icons.info,
+                                size: 11,
+                                color: theme.colorScheme.primary,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              prefixIconConstraints: const BoxConstraints(
+                minWidth: 0,
+                minHeight: 0,
+              ),
               suffixIcon: _searchController.text.isEmpty
                   ? null
                   : IconButton(
@@ -1167,25 +1221,6 @@ class _SearchAndFiltersRowState extends State<TaskSearchAndFiltersRow> {
                   ),
                 ],
               ),
-            ),
-          ] else ...[
-            const SizedBox(height: 8),
-            Text(
-              'Examples',
-              style: theme.textTheme.labelLarge?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: _queryExamples.map((example) {
-                return ActionChip(
-                  label: Text(example),
-                  onPressed: () => _applyExample(example),
-                );
-              }).toList(),
             ),
           ],
           const SizedBox(height: 12),
@@ -1310,6 +1345,132 @@ class _SearchAndFiltersRowState extends State<TaskSearchAndFiltersRow> {
       TaskQuerySuggestionType.flag => Icons.flag_outlined,
       TaskQuerySuggestionType.date => Icons.event_outlined,
     };
+  }
+}
+
+class _SearchSyntaxSheet extends StatelessWidget {
+  const _SearchSyntaxSheet({required this.examples});
+
+  final List<String> examples;
+
+  static const List<(String, String)> _tags = [
+    ('+home', 'Task has this tag'),
+    ('-blocked', 'Task does not have this tag'),
+  ];
+
+  static const List<(String, String)> _projects = [
+    ('project:work', 'Project and its subprojects'),
+    ('-project:someday', 'Exclude a project'),
+  ];
+
+  static const List<(String, String)> _fields = [
+    ('status:pending', 'Filter by status'),
+    ('priority:H', 'Filter by priority (H, M, L)'),
+    ('due.before:today', 'Due before a date'),
+  ];
+
+  static const List<(String, String)> _operators = [
+    ('+home project:work', 'All terms must match'),
+    ('+home or +office', 'Either term matches'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SafeArea(
+      top: false,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Search syntax',
+              style: theme.textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Use Taskwarrior-style terms to narrow the list. '
+              'Separate terms with spaces to require all of them.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 16),
+            _section(theme, 'Tags', _tags),
+            _section(theme, 'Projects', _projects),
+            _section(theme, 'Status and dates', _fields),
+            _section(theme, 'Combining terms', _operators),
+            Text(
+              'Examples',
+              style: theme.textTheme.labelLarge?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final example in examples)
+                  ActionChip(
+                    label: Text(example),
+                    onPressed: () => Navigator.pop(context, example),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _section(
+    ThemeData theme,
+    String title,
+    List<(String, String)> entries,
+  ) {
+    final codeStyle = theme.textTheme.bodyMedium?.copyWith(
+      fontFamily: 'monospace',
+      fontWeight: FontWeight.w600,
+      color: theme.colorScheme.primary,
+    );
+    final descriptionStyle = theme.textTheme.bodySmall?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+    );
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: theme.textTheme.labelLarge?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 8),
+          for (final (code, description) in entries)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(flex: 2, child: Text(code, style: codeStyle)),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    flex: 3,
+                    child: Text(description, style: descriptionStyle),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
   }
 }
 
