@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:taskdroid/models/task_virtual_flags.dart';
 import 'package:taskdroid/providers/profile_state.dart';
 import 'package:taskdroid/providers/task_state.dart';
 import 'package:taskdroid/services/calendar_service.dart';
@@ -491,8 +492,9 @@ class _TaskDetailContent extends StatelessWidget {
 
   Widget _buildRelationsCard(BuildContext context, ColorScheme colorScheme) {
     final rows = <Widget>[];
+    final tags = userTags(task.tags);
 
-    if (task.tags.isNotEmpty) {
+    if (tags.isNotEmpty) {
       rows.add(
         _buildDetailRow(
           context,
@@ -504,7 +506,7 @@ class _TaskDetailContent extends StatelessWidget {
             spacing: 6,
             runSpacing: 6,
             alignment: WrapAlignment.end,
-            children: task.tags
+            children: tags
                 .map(
                   (t) => Container(
                     padding: const EdgeInsets.symmetric(
@@ -1167,7 +1169,7 @@ class _TaskDetailContent extends StatelessWidget {
     TaskView original,
     TaskEditorResult newResult,
   ) {
-    final oldTags = Set<String>.from(original.tags);
+    final oldTags = Set<String>.from(userTags(original.tags));
     final newTags = Set<String>.from(newResult.tags);
     final addTags = newTags.difference(oldTags).toList();
     final removeTags = oldTags.difference(newTags).toList();

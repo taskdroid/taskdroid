@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:taskdroid/models/task_virtual_flags.dart';
 import 'package:taskdroid/providers/task_state.dart';
 import 'package:taskdroid/src/rust/api.dart';
 import 'package:taskdroid/widgets/tag_input.dart';
@@ -120,7 +121,7 @@ class _TaskEditorState extends State<TaskEditor>
 
     _descriptionController = TextEditingController(text: t?.description ?? '');
     _selectedPriority = t?.priority ?? 'X';
-    _selectedTags = t != null ? List.from(t.tags) : [];
+    _selectedTags = t != null ? userTags(t.tags) : [];
     _currentDependencies = t != null ? Set.from(t.depends) : {};
 
     _project = t?.project ?? '';
@@ -154,7 +155,7 @@ class _TaskEditorState extends State<TaskEditor>
         }
       }
       if (iv.tags != null) {
-        _selectedTags = {..._selectedTags, ...iv.tags!}.toList();
+        _selectedTags = {..._selectedTags, ...userTags(iv.tags!)}.toList();
       }
     }
 

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:taskdroid/models/task_virtual_flags.dart';
 import 'package:taskdroid/providers/app_state.dart';
 import 'package:taskdroid/providers/task_state.dart';
 import 'package:taskdroid/src/rust/api.dart';
@@ -121,7 +122,10 @@ class TaskListItem extends StatelessWidget {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      _buildMetadata(task),
+                      _buildMetadata(
+                        task,
+                        showBuiltinTags: appState.showBuiltinTagsInTaskList,
+                      ),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.bodySmall?.copyWith(
@@ -225,15 +229,16 @@ class TaskListItem extends StatelessWidget {
     );
   }
 
-  String _buildMetadata(TaskView task) {
+  String _buildMetadata(TaskView task, {required bool showBuiltinTags}) {
     final parts = <String>[];
 
     if (task.project != null && task.project!.isNotEmpty) {
       parts.add(task.project!);
     }
 
-    if (task.tags.isNotEmpty) {
-      parts.add(task.tags.join(', '));
+    final tags = visibleTaskTags(task.tags, showStateTags: showBuiltinTags);
+    if (tags.isNotEmpty) {
+      parts.add(tags.join(', '));
     }
 
     if (task.due != null) {

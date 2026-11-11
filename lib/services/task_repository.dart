@@ -51,7 +51,7 @@ class TaskRepository {
         in (_allAutocompleteTasks.isNotEmpty
             ? _allAutocompleteTasks
             : _allTasks)) {
-      tags.addAll(task.tags);
+      tags.addAll(userTags(task.tags));
     }
     return tags;
   }

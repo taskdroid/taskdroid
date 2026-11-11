@@ -66,6 +66,20 @@ class _SettingsPageState extends State<SettingsPage> {
                 onChanged: (value) =>
                     context.read<AppState>().setDarkTheme(value),
               ),
+               const Divider(indent: 16, endIndent: 16, height: 1),
+               SwitchListTile(
+                 title: const Text(
+                   'Show task state tags',
+                   style: TextStyle(fontWeight: FontWeight.w500),
+                 ),
+                 subtitle: const Text(
+                   'Include READY, WAITING, SCHEDULED, and ACTIVE',
+                 ),
+                 value: appState.showBuiltinTagsInTaskList,
+                 onChanged: (value) => context
+                     .read<AppState>()
+                     .setShowBuiltinTagsInTaskList(value),
+               ),
             ],
           ),
 
