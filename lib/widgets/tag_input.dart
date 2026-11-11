@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:taskdroid/theme/tokens.dart';
 
 /// Tag editor used by the task editor's tag sheet: selected chips, a search

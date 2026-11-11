@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:taskdroid/theme/tokens.dart';
 
 /// A 52 px header that reveals [child] under it. Written by hand instead of

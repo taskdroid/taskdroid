@@ -1,59 +1,13 @@
-name: Tests & Android Release
+name: Build & Release
 
 on:
   push:
-    branches: [master]
     tags: ["v*"]
-  pull_request:
-    branches: [master]
+  workflow_dispatch:
 
 jobs:
-  tests:
-    name: Flutter and Rust checks
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: "stable"
-
-      - name: Cache test dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            rust/target
-            ~/.pub-cache
-            .dart_tool
-          key: tests-${{ runner.os }}-${{ hashFiles('pubspec.lock', 'rust/Cargo.lock') }}
-          restore-keys: |
-            tests-${{ runner.os }}-
-
-      - name: Install Flutter dependencies
-        run: flutter pub get
-
-      - name: Generate app version file
-        run: dart run tool/generate_version.dart
-
-      - name: Analyze Flutter code
-        run: flutter analyze
-
-      - name: Run Flutter tests
-        run: flutter test --no-pub
-
-      - name: Check Rust formatting
-        working-directory: rust
-        run: cargo fmt --all -- --check
-
-      - name: Run Rust tests
-        working-directory: rust
-        run: cargo test --locked
-
   build:
-    if: startsWith(github.ref, 'refs/tags/v')
+    name: Build & Sign Release APKs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -62,6 +16,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: "stable"
+          flutter-version: "3.50.0"
 
       - name: Install Android Build Tools
         run: |
@@ -95,7 +50,6 @@ jobs:
             cache-${{ runner.os }}-
 
       - name: Build & Sign Release APKs
-        if: startsWith(github.ref, 'refs/tags/')
         run: ./build.sh --release --split --sign
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -104,7 +58,6 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
       - name: Upload Signed Release APKs
-        if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v4
         with:
           name: signed-release-apks
@@ -115,7 +68,7 @@ jobs:
   create-release:
     name: Create Release & Upload APKs
     needs: build
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write

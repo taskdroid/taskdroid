@@ -15,6 +15,27 @@ CLEAN=false
 OUTPUT_DIR="build/app/outputs/flutter-apk"
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
+# Minimum tooling versions
+MIN_FLUTTER_VERSION="3.50.0"
+
+check_versions() {
+    if ! command -v flutter >/dev/null 2>&1; then
+        log_error "flutter not found on PATH"
+        exit 1
+    fi
+    local flutter_version
+    flutter_version="$(flutter --version 2>/dev/null | head -1 | grep -oE 'Flutter [0-9.]+' | awk '{print $2}')"
+    if [[ -z "$flutter_version" ]]; then
+        log_error "could not determine flutter version"
+        exit 1
+    fi
+    if [[ "$(printf '%s\n%s\n' "$MIN_FLUTTER_VERSION" "$flutter_version" | sort -V | head -n1)" != "$MIN_FLUTTER_VERSION" ]]; then
+        log_error "flutter $flutter_version is below minimum $MIN_FLUTTER_VERSION"
+        exit 1
+    fi
+    log_info "flutter $flutter_version (>= $MIN_FLUTTER_VERSION)"
+}
+
 usage() {
     echo "Usage: $0 [OPTIONS]"
     echo "Build Taskdroid APKs"
@@ -51,6 +72,8 @@ log_warn() {
 log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
+
+check_versions
 
 # parse arguments
 while [[ $# -gt 0 ]]; do

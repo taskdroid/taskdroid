@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:taskdroid/models/filter_tab.dart';
 import 'package:taskdroid/services/task_query_autocomplete.dart';

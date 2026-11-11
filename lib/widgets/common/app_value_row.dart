@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:taskdroid/theme/tokens.dart';
 
 /// A label/value row meant to be stacked inside an `AppSectionCard`.

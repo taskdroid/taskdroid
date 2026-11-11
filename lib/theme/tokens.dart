@@ -2,7 +2,7 @@
 /// invent their own.
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// 4px grid. Use these instead of literal EdgeInsets values in new code.
 abstract final class AppSpace {

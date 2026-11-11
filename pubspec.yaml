@@ -4,7 +4,8 @@ version: 0.2.1
 publish_to: 'none'
 
 environment:
-  sdk: ^3.10.1
+  sdk: ^3.13.0
+  flutter: ">=3.50.0"
 
 dependencies:
   flutter:
@@ -14,7 +15,7 @@ dependencies:
   shared_preferences: ^2.5.3
   flutter_secure_storage: ^9.2.4
   path_provider: ^2.1.5
-  google_fonts: ^6.3.3
+  google_fonts: ^9.0.0
   http: ^1.6.0
   uuid: ^4.5.2
   file_selector: ^1.0.4
@@ -23,6 +24,7 @@ dependencies:
   rust_lib_taskdroid:
     path: rust_builder
   flutter_rust_bridge: 2.11.1
+  material_ui: ^1.11.0
 
 dev_dependencies:
   flutter_test:

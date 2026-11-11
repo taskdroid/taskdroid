@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:taskdroid/theme/tokens.dart';
 
 /// Dismisses the keyboard when a tap lands on space no other widget claims.

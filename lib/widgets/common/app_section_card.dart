@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:taskdroid/theme/tokens.dart';
 
 /// A low-emphasis surface for a related group of controls or details.
