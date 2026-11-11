@@ -5,6 +5,7 @@ import 'package:taskdroid/providers/profile_state.dart';
 import 'package:taskdroid/providers/task_state.dart';
 import 'package:taskdroid/services/calendar_service.dart';
 import 'package:taskdroid/src/rust/api.dart';
+import 'package:taskdroid/widgets/common/app_section_header.dart';
 import 'package:taskdroid/widgets/task_editor.dart';
 
 enum SeriesScope { single, entire }
@@ -192,11 +193,11 @@ class _TaskDetailContent extends StatelessWidget {
               duration: duration,
             ),
 
-            _buildSectionHeader(context, 'Dates & Timeline'),
+            const AppSectionHeader('Dates & Timeline'),
             _buildDatesCard(context, colorScheme),
             const SizedBox(height: 24),
 
-            _buildSectionHeader(context, 'Properties & Relations'),
+            const AppSectionHeader('Properties & Relations'),
             _buildRelationsCard(context, colorScheme),
             const SizedBox(height: 24),
 
@@ -208,7 +209,7 @@ class _TaskDetailContent extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                _buildSectionHeader(context, 'Notes', bottomPadding: 0),
+                const AppSectionHeader('Notes', bottomPadding: 0),
                 TextButton.icon(
                   onPressed: () => _showAddNoteDialog(context),
                   icon: const Icon(Icons.add_comment_outlined, size: 18),
@@ -891,25 +892,6 @@ class _TaskDetailContent extends StatelessWidget {
         context,
       ).showSnackBar(SnackBar(content: Text(error)));
     }
-  }
-
-  Widget _buildSectionHeader(
-    BuildContext context,
-    String title, {
-    double bottomPadding = 12,
-  }) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: bottomPadding, left: 4),
-      child: Text(
-        title.toUpperCase(),
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 1.2,
-          color: Theme.of(context).colorScheme.primary,
-        ),
-      ),
-    );
   }
 
   String _formatDate(String dateStr) {

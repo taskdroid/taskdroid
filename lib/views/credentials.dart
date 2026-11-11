@@ -8,6 +8,8 @@ import 'package:taskdroid/services/profile_storage.dart';
 import 'package:taskdroid/services/taskrc_config_service.dart';
 import 'package:taskdroid/src/rust/api.dart';
 import 'package:taskdroid/widgets/app_drawer.dart';
+import 'package:taskdroid/widgets/common/app_section_card.dart';
+import 'package:taskdroid/widgets/common/app_section_header.dart';
 import 'package:uuid/uuid.dart';
 
 class CredentialsPage extends StatefulWidget {
@@ -301,9 +303,8 @@ class _CredentialsPageState extends State<CredentialsPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildSectionHeader(context, 'Active Profile'),
-                  _buildGroupContainer(
-                    context,
+                  const AppSectionHeader('Active Profile'),
+                  AppSectionCard(
                     padding: const EdgeInsets.all(16),
                     child: DropdownButtonFormField<String>(
                       initialValue: profileState.currentProfileId,
@@ -343,9 +344,8 @@ class _CredentialsPageState extends State<CredentialsPage> {
 
                   const SizedBox(height: 24),
 
-                  _buildSectionHeader(context, 'Profile Configuration'),
-                  _buildGroupContainer(
-                    context,
+                  const AppSectionHeader('Profile Configuration'),
+                  AppSectionCard(
                     padding: const EdgeInsets.all(20),
                     child: Column(
                       children: [
@@ -513,7 +513,7 @@ class _CredentialsPageState extends State<CredentialsPage> {
 
                   const SizedBox(height: 24),
 
-                  _buildSectionHeader(context, 'Taskwarrior Config'),
+                  const AppSectionHeader('Taskwarrior Config'),
                   _buildConfigSection(context, profileState),
                 ],
               ),
@@ -529,8 +529,7 @@ class _CredentialsPageState extends State<CredentialsPage> {
     final profile = profileState.currentProfile;
 
     if (profile == null || !_isEditing || _editingProfileId != profile.id) {
-      return _buildGroupContainer(
-        context,
+      return AppSectionCard(
         padding: const EdgeInsets.all(20),
         child: Text(
           'Select a profile to view config',
@@ -544,8 +543,7 @@ class _CredentialsPageState extends State<CredentialsPage> {
     final hasConfig = _configValues.isNotEmpty;
     final isLoaded = !_configLoading;
 
-    return _buildGroupContainer(
-      context,
+    return AppSectionCard(
       padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -964,40 +962,6 @@ class _CredentialsPageState extends State<CredentialsPage> {
       ),
     );
     return confirmed ?? false;
-  }
-
-  Widget _buildSectionHeader(BuildContext context, String title) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 4, bottom: 12),
-      child: Text(
-        title.toUpperCase(),
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 1.2,
-          color: Theme.of(context).colorScheme.primary,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildGroupContainer(
-    BuildContext context, {
-    required Widget child,
-    EdgeInsetsGeometry? padding,
-  }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Theme.of(
-          context,
-        ).colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(
-          color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.1),
-        ),
-      ),
-      child: Padding(padding: padding ?? EdgeInsets.zero, child: child),
-    );
   }
 }
 
