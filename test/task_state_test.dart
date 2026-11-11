@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:taskdroid/models/filter_tab.dart';
 import 'package:taskdroid/providers/task_state.dart';
+import 'package:taskdroid/services/task_queue_service.dart';
+import 'package:taskdroid/services/task_repository.dart';
 import 'package:taskdroid/src/rust/api.dart';
 
 TaskView _task({
@@ -40,7 +44,95 @@ TaskView _task({
   );
 }
 
+/// Task source whose `listTasks` answers only when the test says so.
+class _DelayedTaskSource {
+  final List<Completer<TaskListResult>> _pending = [];
+
+  Future<TaskListResult> list(TaskFilter filter) {
+    final completer = Completer<TaskListResult>();
+    _pending.add(completer);
+    return completer.future;
+  }
+
+  void complete(int index, List<TaskView> tasks) {
+    _pending[index].complete(
+      TaskListResult(tasks: tasks, totalCount: BigInt.from(tasks.length)),
+    );
+  }
+}
+
 void main() {
+  group('loading state', () {
+    test('refreshPendingTasks notifies while the load is running', () async {
+      final source = _DelayedTaskSource();
+      final state = TaskState(
+        repository: TaskRepository(listTasks: source.list),
+      );
+      final loadingAtNotify = <bool>[];
+      state.addListener(() => loadingAtNotify.add(state.isLoading));
+
+      final refresh = state.refreshPendingTasks();
+
+      expect(state.isLoading, isTrue);
+      expect(loadingAtNotify, [true]);
+
+      source.complete(0, [_task()]);
+      await refresh;
+
+      expect(state.isLoading, isFalse);
+      expect(loadingAtNotify, [true, false]);
+    });
+
+    test('switching pills repartitions without reloading', () async {
+      final source = _DelayedTaskSource();
+      final state = TaskState(
+        repository: TaskRepository(listTasks: source.list),
+      );
+      final loading = state.refreshPendingTasks();
+      source.complete(0, [_task()]);
+      await loading;
+
+      state.setQueueView(TaskQueueView.waiting);
+
+      expect(source._pending, hasLength(1));
+      expect(state.isLoading, isFalse);
+      expect(state.displaySourceTasks, isEmpty);
+      expect(state.allTasks, hasLength(1));
+    });
+
+    test(
+      'switching tabs applies the new tab before the reload finishes',
+      () async {
+        final source = _DelayedTaskSource();
+        final state = TaskState(
+          repository: TaskRepository(listTasks: source.list),
+        );
+        await state.addFilterTab('All');
+        await state.addFilterTab('Second');
+        final firstTabId = state.filterTabs.first.id;
+        expect(state.currentTab?.id, isNot(firstTabId));
+
+        var sawLoading = false;
+        state.addListener(() {
+          if (state.isLoading) sawLoading = true;
+        });
+
+        await state.switchToTab(firstTabId);
+
+        // The tab and its filtered list are live while the reload is still out.
+        expect(state.currentTab?.id, firstTabId);
+        expect(sawLoading, isTrue);
+        expect(state.isLoading, isTrue);
+
+        source.complete(0, [_task()]);
+        await Future<void>.delayed(Duration.zero);
+        await Future<void>.delayed(Duration.zero);
+
+        expect(state.isLoading, isFalse);
+      },
+    );
+  });
+
   group('matchesTaskFilters', () {
     late TaskState state;
 

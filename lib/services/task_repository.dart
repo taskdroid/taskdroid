@@ -1,9 +1,16 @@
-import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:taskdroid/models/task_virtual_flags.dart';
 import 'package:taskdroid/src/rust/api.dart';
 
 class TaskRepository {
+  /// Test seam: lets a test drive [refreshPendingTasks] with a delayed task
+  /// source instead of a real Rust [TaskManager].
+  TaskRepository({
+    Future<TaskListResult> Function(TaskFilter filter)? listTasks,
+  }) : _listTasksOverride = listTasks;
+
+  final Future<TaskListResult> Function(TaskFilter filter)? _listTasksOverride;
+
   TaskManager? _taskManager;
   List<TaskView> _allTasks = [];
   List<TaskView> _allAutocompleteTasks = [];
@@ -15,6 +22,8 @@ class TaskRepository {
   bool _isLoading = false;
   String? _error;
   bool _needsRefreshAfterCurrentLoad = false;
+  String? _queuedSearchQuery;
+  Future<void>? _inFlightRefresh;
 
   String? _currentProfileId;
   int _recurrenceLimit = 1;
@@ -108,14 +117,30 @@ class TaskRepository {
   }
 
   // --- task fetch/refresh
-  Future<void> refreshPendingTasks(String effectiveSearchQuery) async {
-    if (_taskManager == null) return;
+
+  /// Loads tasks for [effectiveSearchQuery].
+  ///
+  /// If a load is already running the newest query wins: it is queued and the
+  /// running load applies it once it finishes. Every caller's future completes
+  /// only after the last queued reload is done, so `TaskState` can notify once
+  /// with the final result.
+  Future<void> refreshPendingTasks(String effectiveSearchQuery) {
+    if (_taskManager == null && _listTasksOverride == null) {
+      return Future<void>.value();
+    }
 
     if (_isLoading) {
       _needsRefreshAfterCurrentLoad = true;
-      return;
+      _queuedSearchQuery = effectiveSearchQuery;
+      return _inFlightRefresh ?? Future<void>.value();
     }
 
+    final refresh = _runRefresh(effectiveSearchQuery);
+    _inFlightRefresh = refresh;
+    return refresh;
+  }
+
+  Future<void> _runRefresh(String effectiveSearchQuery) async {
     _isLoading = true;
     _error = null;
 
@@ -129,7 +154,10 @@ class TaskRepository {
         limit: BigInt.from(5000),
       );
 
-      final result = await _taskManager!.listTasks(filter: filter);
+      final result = await _listTasks(filter);
+      // A newer query arrived while this one was loading, so its result is
+      // stale and is dropped; the queued reload below applies the newest one.
+      if (_needsRefreshAfterCurrentLoad) return;
       final now = DateTime.now().toUtc();
       final ready = <TaskView>[];
       final waiting = <TaskView>[];
@@ -165,9 +193,19 @@ class TaskRepository {
       _isLoading = false;
       if (_needsRefreshAfterCurrentLoad) {
         _needsRefreshAfterCurrentLoad = false;
-        unawaited(refreshPendingTasks(effectiveSearchQuery));
+        final query = _queuedSearchQuery ?? effectiveSearchQuery;
+        _queuedSearchQuery = null;
+        // Await the queued reload so this future, and every caller waiting on
+        // it, resolves once the final result has actually been applied.
+        await refreshPendingTasks(query);
       }
     }
+  }
+
+  Future<TaskListResult> _listTasks(TaskFilter filter) {
+    final override = _listTasksOverride;
+    if (override != null) return override(filter);
+    return _taskManager!.listTasks(filter: filter);
   }
 
   Future<void> refreshAutocompleteData() async {

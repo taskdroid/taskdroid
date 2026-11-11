@@ -16,7 +16,10 @@ import 'package:taskdroid/services/task_query_language.dart';
 import 'package:taskdroid/src/rust/api.dart';
 
 class TaskState extends ChangeNotifier {
-  final TaskRepository _repo = TaskRepository();
+  TaskState({TaskRepository? repository})
+    : _repo = repository ?? TaskRepository();
+
+  final TaskRepository _repo;
   final TaskFilterService _filterService = TaskFilterService();
   final TaskTabService _tabService = TaskTabService();
   final TaskContextService _ctxService = TaskContextService();
@@ -36,6 +39,7 @@ class TaskState extends ChangeNotifier {
   List<TaskView> get pendingTasks => _repo.readyTasks;
   List<TaskView> get waitingTasks => _repo.waitingTasks;
   List<TaskView> get scheduledTasks => _repo.scheduledTasks;
+  List<TaskView> get allTasks => _repo.allTasks;
   TaskQueueView get queueView => _queueService.queueView;
   List<TaskView> get currentViewTasks => _sourceTasksForCurrentView();
   bool get isLoading => _repo.isLoading;
@@ -125,7 +129,11 @@ class TaskState extends ChangeNotifier {
   }
 
   Future<void> refreshPendingTasks() async {
-    await _repo.refreshPendingTasks(effectiveSearchQuery);
+    final refresh = _repo.refreshPendingTasks(effectiveSearchQuery);
+    // The repository flips isLoading synchronously, so announce the load now;
+    // otherwise the progress bar and dim only appear once it has finished.
+    if (_repo.isLoading) notifyListeners();
+    await refresh;
     _filterService.invalidateCache();
     notifyListeners();
   }
@@ -398,6 +406,11 @@ class TaskState extends ChangeNotifier {
     });
   }
 
+  void _refreshQueryNow() {
+    _debounceFilterTimer?.cancel();
+    unawaited(refreshPendingTasks());
+  }
+
   void toggleTag(String tag) {
     _filterService.toggleTag(tag);
     _tabService.scheduleSave(_currentProfileId, _filterService);
@@ -466,11 +479,14 @@ class TaskState extends ChangeNotifier {
   Future<void> switchToTab(String tabId) async {
     await _tabService.switchToTab(tabId, _filterService);
     _filterService.invalidateCache();
-    _scheduleQueryRefresh();
-    if (_currentProfileId != null) {
-      await _tabService.saveTabs(_currentProfileId!);
-    }
+    // Update the list with the new tab's filters before any I/O; persisting the
+    // tab and reloading the dataset must not hold up the visible switch.
     notifyListeners();
+    _refreshQueryNow();
+    final profileId = _currentProfileId;
+    if (profileId != null) {
+      unawaited(_tabService.saveTabs(profileId));
+    }
   }
 
   Future<void> addFilterTab(String name) async {

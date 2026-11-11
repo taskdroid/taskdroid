@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -242,6 +244,17 @@ class _HomePageState extends State<HomePage>
                 taskState.includeProjects.isNotEmpty ||
                 taskState.excludeProjects.isNotEmpty,
           ),
+        SizedBox(
+          height: 2,
+          child: taskState.isLoading
+              ? LinearProgressIndicator(
+                  color: Theme.of(context).colorScheme.primary,
+                  backgroundColor: Theme.of(
+                    context,
+                  ).colorScheme.surfaceContainerHighest,
+                )
+              : null,
+        ),
         AnimatedSize(
           duration: const Duration(milliseconds: 200),
           curve: Curves.easeInOut,
@@ -270,7 +283,12 @@ class _HomePageState extends State<HomePage>
                 )
               : const SizedBox(width: double.infinity, height: 0),
         ),
-        Expanded(child: _buildTaskBody(context, taskState)),
+        Expanded(
+          child: _SlowLoadDimmer(
+            isLoading: taskState.isLoading,
+            child: _buildTaskBody(context, taskState),
+          ),
+        ),
       ],
     );
   }
@@ -430,7 +448,7 @@ class _HomePageState extends State<HomePage>
       );
     }
 
-    if (taskState.isLoading && sourceTasks.isEmpty) {
+    if (taskState.isLoading && taskState.allTasks.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
 
@@ -2200,6 +2218,67 @@ class _EditContextDialogState extends State<_EditContextDialog> {
           child: const Text('Save'),
         ),
       ],
+    );
+  }
+}
+
+/// Dims the task body only when a load has been running for a while, so quick
+/// reloads (marking a task done, debounced search keystrokes) do not flash.
+class _SlowLoadDimmer extends StatefulWidget {
+  const _SlowLoadDimmer({required this.isLoading, required this.child});
+
+  /// How long a load may run before the body dims.
+  static const Duration delay = Duration(milliseconds: 300);
+
+  final bool isLoading;
+  final Widget child;
+
+  @override
+  State<_SlowLoadDimmer> createState() => _SlowLoadDimmerState();
+}
+
+class _SlowLoadDimmerState extends State<_SlowLoadDimmer> {
+  Timer? _timer;
+  bool _dimmed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _sync();
+  }
+
+  @override
+  void didUpdateWidget(covariant _SlowLoadDimmer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.isLoading != widget.isLoading) _sync();
+  }
+
+  void _sync() {
+    _timer?.cancel();
+    if (!widget.isLoading) {
+      // Direct assignment: a rebuild is already scheduled.
+      _dimmed = false;
+      return;
+    }
+    _timer = Timer(_SlowLoadDimmer.delay, () {
+      if (mounted && widget.isLoading) {
+        setState(() => _dimmed = true);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 150),
+      opacity: _dimmed ? 0.65 : 1.0,
+      child: widget.child,
     );
   }
 }
