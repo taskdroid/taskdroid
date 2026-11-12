@@ -66,20 +66,33 @@ class _SettingsPageState extends State<SettingsPage> {
                 onChanged: (value) =>
                     context.read<AppState>().setDarkTheme(value),
               ),
-               const Divider(indent: 16, endIndent: 16, height: 1),
-               SwitchListTile(
-                 title: const Text(
-                   'Show task state tags',
-                   style: TextStyle(fontWeight: FontWeight.w500),
-                 ),
-                 subtitle: const Text(
-                   'Include READY, WAITING, SCHEDULED, and ACTIVE',
-                 ),
-                 value: appState.showBuiltinTagsInTaskList,
-                 onChanged: (value) => context
-                     .read<AppState>()
-                     .setShowBuiltinTagsInTaskList(value),
-               ),
+              const Divider(indent: 16, endIndent: 16, height: 1),
+              SwitchListTile(
+                title: const Text(
+                  'Show tag and project filters',
+                  style: TextStyle(fontWeight: FontWeight.w500),
+                ),
+                subtitle: const Text(
+                  'Hide the filter chips and use query syntax instead',
+                ),
+                value: appState.showTagProjectFilters,
+                onChanged: (value) =>
+                    context.read<AppState>().setShowTagProjectFilters(value),
+              ),
+              const Divider(indent: 16, endIndent: 16, height: 1),
+              SwitchListTile(
+                title: const Text(
+                  'Show task state tags',
+                  style: TextStyle(fontWeight: FontWeight.w500),
+                ),
+                subtitle: const Text(
+                  'Include READY, WAITING, SCHEDULED, and ACTIVE',
+                ),
+                value: appState.showBuiltinTagsInTaskList,
+                onChanged: (value) => context
+                    .read<AppState>()
+                    .setShowBuiltinTagsInTaskList(value),
+              ),
             ],
           ),
 

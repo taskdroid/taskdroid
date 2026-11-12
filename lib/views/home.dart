@@ -275,7 +275,6 @@ class _HomePageState extends State<HomePage>
                   onOpenTags: () => _showTagSelector(context, taskState),
                   onOpenProjects: () =>
                       _showProjectSelector(context, taskState),
-                  onClear: taskState.clearFilters,
                   onRemoveTag: taskState.toggleTag,
                   onRemoveExcludedTag: taskState.toggleExcludedTag,
                   onRemoveProject: taskState.toggleProject,
@@ -937,7 +936,6 @@ class TaskSearchAndFiltersRow extends StatefulWidget {
     required this.projectMatchMode,
     required this.onOpenTags,
     required this.onOpenProjects,
-    required this.onClear,
     required this.onRemoveTag,
     required this.onRemoveExcludedTag,
     required this.onRemoveProject,
@@ -957,7 +955,6 @@ class TaskSearchAndFiltersRow extends StatefulWidget {
   final FilterMatchMode projectMatchMode;
   final VoidCallback onOpenTags;
   final VoidCallback onOpenProjects;
-  final VoidCallback onClear;
   final ValueChanged<String> onRemoveTag;
   final ValueChanged<String> onRemoveExcludedTag;
   final ValueChanged<String> onRemoveProject;
@@ -1108,6 +1105,8 @@ class _SearchAndFiltersRowState extends State<TaskSearchAndFiltersRow> {
         widget.includeProjects.isNotEmpty ||
         widget.excludeProjects.isNotEmpty;
     final theme = Theme.of(context);
+    final showFilterBy =
+        context.watch<AppState?>()?.showTagProjectFilters ?? true;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -1223,64 +1222,69 @@ class _SearchAndFiltersRowState extends State<TaskSearchAndFiltersRow> {
               ),
             ),
           ],
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              ActionChip(
-                avatar: const Icon(Icons.label_outline, size: 16),
-                label: Text(
-                  widget.includeTags.isEmpty && widget.excludeTags.isEmpty
-                      ? 'Tags'
-                      : 'Tags (${widget.includeTags.length}/${widget.excludeTags.length})',
+          if (showFilterBy) const SizedBox(height: 12),
+          if (showFilterBy)
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ActionChip(
+                      avatar: const Icon(Icons.label_outline, size: 16),
+                      label: Text(
+                        widget.includeTags.isEmpty && widget.excludeTags.isEmpty
+                            ? 'Tags'
+                            : 'Tags (${widget.includeTags.length}/${widget.excludeTags.length})',
+                      ),
+                      onPressed: widget.onOpenTags,
+                      backgroundColor:
+                          widget.includeTags.isNotEmpty ||
+                              widget.excludeTags.isNotEmpty
+                          ? theme.colorScheme.primaryContainer
+                          : null,
+                    ),
+                    const SizedBox(width: 8),
+                    Icon(
+                      widget.tagMatchMode == FilterMatchMode.and
+                          ? Icons.call_merge
+                          : Icons.alt_route,
+                      size: 16,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ],
                 ),
-                onPressed: widget.onOpenTags,
-                backgroundColor:
-                    widget.includeTags.isNotEmpty ||
-                        widget.excludeTags.isNotEmpty
-                    ? theme.colorScheme.primaryContainer
-                    : null,
-              ),
-              Icon(
-                widget.tagMatchMode == FilterMatchMode.and
-                    ? Icons.call_merge
-                    : Icons.alt_route,
-                size: 16,
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-              ActionChip(
-                avatar: const Icon(Icons.folder_outlined, size: 16),
-                label: Text(
-                  widget.includeProjects.isEmpty &&
-                          widget.excludeProjects.isEmpty
-                      ? 'Projects'
-                      : 'Projects (${widget.includeProjects.length}/${widget.excludeProjects.length})',
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ActionChip(
+                      avatar: const Icon(Icons.folder_outlined, size: 16),
+                      label: Text(
+                        widget.includeProjects.isEmpty &&
+                                widget.excludeProjects.isEmpty
+                            ? 'Projects'
+                            : 'Projects (${widget.includeProjects.length}/${widget.excludeProjects.length})',
+                      ),
+                      onPressed: widget.onOpenProjects,
+                      backgroundColor:
+                          widget.includeProjects.isNotEmpty ||
+                              widget.excludeProjects.isNotEmpty
+                          ? theme.colorScheme.primaryContainer
+                          : null,
+                    ),
+                    const SizedBox(width: 8),
+                    Icon(
+                      widget.projectMatchMode == FilterMatchMode.and
+                          ? Icons.call_merge
+                          : Icons.alt_route,
+                      size: 16,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ],
                 ),
-                onPressed: widget.onOpenProjects,
-                backgroundColor:
-                    widget.includeProjects.isNotEmpty ||
-                        widget.excludeProjects.isNotEmpty
-                    ? theme.colorScheme.primaryContainer
-                    : null,
-              ),
-              Icon(
-                widget.projectMatchMode == FilterMatchMode.and
-                    ? Icons.call_merge
-                    : Icons.alt_route,
-                size: 16,
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ],
-          ),
-          if (hasFilters || _searchController.text.isNotEmpty)
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton(
-                onPressed: widget.onClear,
-                child: const Text('Clear'),
-              ),
+              ],
             ),
           if (hasFilters) ...[
             const SizedBox(height: 8),
