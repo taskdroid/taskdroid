@@ -1,35 +1,18 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:google_fonts/google_fonts.dart';
-import 'package:taskdroid/theme/app_theme.dart';
 import 'package:taskdroid/theme/tokens.dart';
+
+import 'test_theme.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  // google_fonts downloads Sora on first use, and reports a failed download as
-  // an uncaught async error. Tests must not depend on the network, so runtime
-  // fetching is disabled and the resulting load errors are ignored: the theme
-  // object is still built exactly the same way, only without the font bytes.
-  GoogleFonts.config.allowRuntimeFetching = false;
-
   late final ThemeData light;
   late final ThemeData dark;
 
-  setUpAll(() async {
-    await runZonedGuarded(
-      () async {
-        light = buildAppTheme(Brightness.light);
-        dark = buildAppTheme(Brightness.dark);
-        await Future<void>.delayed(const Duration(milliseconds: 20));
-      },
-      (error, stackTrace) {},
-      zoneSpecification: ZoneSpecification(
-        print: (self, parent, zone, line) {},
-      ),
-    );
+  setUpAll(() {
+    light = testTheme();
+    dark = testTheme(Brightness.dark);
   });
 
   test('buildAppTheme keeps the light and dark differences', () {

@@ -17,6 +17,13 @@ ThemeData buildAppTheme(Brightness brightness) {
       ? baseTextTheme.apply(bodyColor: Colors.white, displayColor: Colors.white)
       : baseTextTheme;
 
+  // Sheets, dialogs-adjacent surfaces and the drawer share one surface. The
+  // Material 3 sheet default is the tinted `surfaceContainerLow`; the drawer
+  // header already uses that tint, so sheets and the drawer body stay on the
+  // plain page surface they were designed against. Decided here once, so no
+  // call site sets a colour.
+  final sheetSurface = colorScheme.surface;
+
   return ThemeData(
     useMaterial3: true,
     colorScheme: colorScheme,
@@ -64,6 +71,7 @@ ThemeData buildAppTheme(Brightness brightness) {
       ),
     ),
     bottomSheetTheme: BottomSheetThemeData(
+      backgroundColor: sheetSurface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(
           top: Radius.circular(AppRadius.sheet),
@@ -72,6 +80,7 @@ ThemeData buildAppTheme(Brightness brightness) {
       showDragHandle: true,
       clipBehavior: Clip.antiAlias,
     ),
+    drawerTheme: DrawerThemeData(backgroundColor: sheetSurface),
     dialogTheme: DialogThemeData(
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppRadius.sheet),

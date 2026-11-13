@@ -5,6 +5,7 @@ import 'package:taskdroid/providers/app_state.dart';
 import 'package:taskdroid/providers/profile_state.dart';
 import 'package:taskdroid/services/calendar_service.dart';
 import 'package:taskdroid/src/rust/api.dart';
+import 'package:taskdroid/theme/tokens.dart';
 import 'package:uuid/uuid.dart';
 
 class OnboardingPage extends StatefulWidget {
@@ -467,7 +468,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
               : theme.colorScheme.surfaceContainerHighest.withValues(
                   alpha: 0.3,
                 ),
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(AppRadius.card),
           border: Border.all(
             color: selected
                 ? theme.colorScheme.primary

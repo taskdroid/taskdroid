@@ -13,8 +13,10 @@ import 'package:taskdroid/services/task_query_autocomplete.dart';
 import 'package:taskdroid/services/task_query_language.dart';
 import 'package:taskdroid/services/write_query_parser.dart';
 import 'package:taskdroid/src/rust/api.dart';
+import 'package:taskdroid/theme/tokens.dart';
 import 'package:taskdroid/views/onboarding.dart';
 import 'package:taskdroid/widgets/app_drawer.dart';
+import 'package:taskdroid/widgets/common/app_sheet.dart';
 import 'package:taskdroid/widgets/filter_tabs.dart';
 import 'package:taskdroid/widgets/task_list.dart';
 import 'package:taskdroid/widgets/task_editor.dart';
@@ -303,7 +305,7 @@ class _HomePageState extends State<HomePage>
 
     return AppBar(
       title: InkWell(
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.chip),
         onTap: () => _ContextChip.showContextSheet(context, taskState),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -638,13 +640,9 @@ class _HomePageState extends State<HomePage>
         (a, b) =>
             itemLabel(a).toLowerCase().compareTo(itemLabel(b).toLowerCase()),
       );
-    final applied = await showModalBottomSheet<_IncludeExcludeSelection<T>>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+    final applied = await showAppSheet<_IncludeExcludeSelection<T>>(
+      context,
+      scrollControlled: true,
       builder: (context) {
         var mode = initialMode;
         var itemSearch = '';
@@ -682,215 +680,211 @@ class _HomePageState extends State<HomePage>
               duration: const Duration(milliseconds: 180),
               curve: Curves.easeOut,
               padding: EdgeInsets.only(bottom: mediaQuery.viewInsets.bottom),
-              child: SafeArea(
-                top: false,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxHeight: mediaQuery.size.height * 0.85,
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          title,
-                          style: theme.textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
+              child: Padding(
+                padding: const EdgeInsets.all(AppSpace.lg),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: mediaQuery.size.height * 0.85,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: theme.textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.bold,
                         ),
-                        const SizedBox(height: 16),
-                        if (enableModeToggle) ...[
-                          Row(
-                            children: [
-                              Text(
-                                modeLabel,
-                                style: theme.textTheme.bodyMedium?.copyWith(
-                                  color: theme.colorScheme.onSurfaceVariant,
-                                ),
-                              ),
-                              const Spacer(),
-                              IconButton.outlined(
-                                onPressed: () {
-                                  setModalState(() {
-                                    mode = mode == FilterMatchMode.and
-                                        ? FilterMatchMode.or
-                                        : FilterMatchMode.and;
-                                  });
-                                },
-                                icon: const Icon(Icons.sync_alt),
-                                tooltip: 'Toggle AND/OR',
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                mode.name.toUpperCase(),
-                                style: theme.textTheme.labelLarge,
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                        ],
-                        TextField(
-                          decoration: const InputDecoration(
-                            hintText: 'Search items...',
-                            prefixIcon: Icon(Icons.search, size: 18),
-                            isDense: true,
-                          ),
-                          onChanged: (value) {
-                            setModalState(() {
-                              itemSearch = value;
-                            });
-                          },
-                        ),
-                        const SizedBox(height: 10),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
+                      ),
+                      const SizedBox(height: 16),
+                      if (enableModeToggle) ...[
+                        Row(
                           children: [
-                            Chip(
-                              avatar: const Icon(Icons.add, size: 14),
-                              label: const Text('Include'),
-                              visualDensity: VisualDensity.compact,
-                              backgroundColor:
-                                  theme.colorScheme.primaryContainer,
-                            ),
-                            Chip(
-                              avatar: const Icon(Icons.remove, size: 14),
-                              label: const Text('Exclude'),
-                              visualDensity: VisualDensity.compact,
-                              backgroundColor: theme.colorScheme.errorContainer,
-                            ),
-                            Chip(
-                              avatar: const Icon(
-                                Icons.radio_button_unchecked,
-                                size: 14,
+                            Text(
+                              modeLabel,
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
                               ),
-                              label: const Text('Off'),
-                              visualDensity: VisualDensity.compact,
+                            ),
+                            const Spacer(),
+                            IconButton.outlined(
+                              onPressed: () {
+                                setModalState(() {
+                                  mode = mode == FilterMatchMode.and
+                                      ? FilterMatchMode.or
+                                      : FilterMatchMode.and;
+                                });
+                              },
+                              icon: const Icon(Icons.sync_alt),
+                              tooltip: 'Toggle AND/OR',
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              mode.name.toUpperCase(),
+                              style: theme.textTheme.labelLarge,
                             ),
                           ],
                         ),
-                        if (allItems.isEmpty) ...[
-                          const SizedBox(height: 16),
-                          const Text('No items available'),
-                        ] else ...[
-                          const SizedBox(height: 16),
-                          Flexible(
-                            child: SingleChildScrollView(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'Tap each item to cycle include/exclude/off',
-                                    style: theme.textTheme.bodySmall?.copyWith(
-                                      color: theme.colorScheme.onSurfaceVariant,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  if (visibleItems.isEmpty)
-                                    const Text('No items match your search')
-                                  else
-                                    Wrap(
-                                      spacing: 8,
-                                      runSpacing: 8,
-                                      children: visibleItems.map((item) {
-                                        final state = stateFor(item);
-                                        final isActive =
-                                            state != _FilterSelectionState.none;
-                                        final avatar = switch (state) {
-                                          _FilterSelectionState.include =>
-                                            const Icon(Icons.add, size: 14),
-                                          _FilterSelectionState.exclude =>
-                                            const Icon(Icons.remove, size: 14),
-                                          _FilterSelectionState.none =>
-                                            const Icon(
-                                              Icons.radio_button_unchecked,
-                                              size: 14,
-                                            ),
-                                        };
-                                        final selectedColor = switch (state) {
-                                          _FilterSelectionState.include =>
-                                            theme.colorScheme.primaryContainer,
-                                          _FilterSelectionState.exclude =>
-                                            theme.colorScheme.errorContainer,
-                                          _FilterSelectionState.none =>
-                                            theme
-                                                .colorScheme
-                                                .surfaceContainerHighest,
-                                        };
-                                        return FilterChip(
-                                          avatar: avatar,
-                                          label: Text(itemLabel(item)),
-                                          selected: isActive,
-                                          selectedColor: selectedColor,
-                                          onSelected: (_) {
-                                            setModalState(() {
-                                              cycleState(item);
-                                            });
-                                          },
-                                        );
-                                      }).toList(),
-                                    ),
-                                ],
-                              ),
+                        const SizedBox(height: 8),
+                      ],
+                      TextField(
+                        decoration: const InputDecoration(
+                          hintText: 'Search items...',
+                          prefixIcon: Icon(Icons.search, size: 18),
+                          isDense: true,
+                        ),
+                        onChanged: (value) {
+                          setModalState(() {
+                            itemSearch = value;
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          Chip(
+                            avatar: const Icon(Icons.add, size: 14),
+                            label: const Text('Include'),
+                            visualDensity: VisualDensity.compact,
+                            backgroundColor: theme.colorScheme.primaryContainer,
+                          ),
+                          Chip(
+                            avatar: const Icon(Icons.remove, size: 14),
+                            label: const Text('Exclude'),
+                            visualDensity: VisualDensity.compact,
+                            backgroundColor: theme.colorScheme.errorContainer,
+                          ),
+                          Chip(
+                            avatar: const Icon(
+                              Icons.radio_button_unchecked,
+                              size: 14,
                             ),
+                            label: const Text('Off'),
+                            visualDensity: VisualDensity.compact,
                           ),
                         ],
+                      ),
+                      if (allItems.isEmpty) ...[
                         const SizedBox(height: 16),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          alignment: WrapAlignment.end,
-                          children: [
+                        const Text('No items available'),
+                      ] else ...[
+                        const SizedBox(height: 16),
+                        Flexible(
+                          child: SingleChildScrollView(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Tap each item to cycle include/exclude/off',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                if (visibleItems.isEmpty)
+                                  const Text('No items match your search')
+                                else
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: visibleItems.map((item) {
+                                      final state = stateFor(item);
+                                      final isActive =
+                                          state != _FilterSelectionState.none;
+                                      final avatar = switch (state) {
+                                        _FilterSelectionState.include =>
+                                          const Icon(Icons.add, size: 14),
+                                        _FilterSelectionState.exclude =>
+                                          const Icon(Icons.remove, size: 14),
+                                        _FilterSelectionState.none =>
+                                          const Icon(
+                                            Icons.radio_button_unchecked,
+                                            size: 14,
+                                          ),
+                                      };
+                                      final selectedColor = switch (state) {
+                                        _FilterSelectionState.include =>
+                                          theme.colorScheme.primaryContainer,
+                                        _FilterSelectionState.exclude =>
+                                          theme.colorScheme.errorContainer,
+                                        _FilterSelectionState.none =>
+                                          theme
+                                              .colorScheme
+                                              .surfaceContainerHighest,
+                                      };
+                                      return FilterChip(
+                                        avatar: avatar,
+                                        label: Text(itemLabel(item)),
+                                        selected: isActive,
+                                        selectedColor: selectedColor,
+                                        onSelected: (_) {
+                                          setModalState(() {
+                                            cycleState(item);
+                                          });
+                                        },
+                                      );
+                                    }).toList(),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 16),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        alignment: WrapAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: () {
+                              setModalState(() {
+                                include.clear();
+                                exclude.clear();
+                              });
+                            },
+                            child: const Text('Clear'),
+                          ),
+                          if (visibleItems.isNotEmpty)
                             TextButton(
                               onPressed: () {
                                 setModalState(() {
-                                  include.clear();
-                                  exclude.clear();
+                                  for (final item in visibleItems) {
+                                    include.add(item);
+                                    exclude.remove(item);
+                                  }
                                 });
                               },
-                              child: const Text('Clear'),
+                              child: const Text('Include visible'),
                             ),
-                            if (visibleItems.isNotEmpty)
-                              TextButton(
-                                onPressed: () {
-                                  setModalState(() {
-                                    for (final item in visibleItems) {
-                                      include.add(item);
-                                      exclude.remove(item);
-                                    }
-                                  });
-                                },
-                                child: const Text('Include visible'),
-                              ),
-                            if (visibleItems.isNotEmpty)
-                              TextButton(
-                                onPressed: () {
-                                  setModalState(() {
-                                    for (final item in visibleItems) {
-                                      exclude.add(item);
-                                      include.remove(item);
-                                    }
-                                  });
-                                },
-                                child: const Text('Exclude visible'),
-                              ),
-                            FilledButton(
-                              onPressed: () => Navigator.pop(
-                                context,
-                                _IncludeExcludeSelection<T>(
-                                  include: Set<T>.from(include),
-                                  exclude: Set<T>.from(exclude),
-                                  mode: mode,
-                                ),
-                              ),
-                              child: const Text('Apply'),
+                          if (visibleItems.isNotEmpty)
+                            TextButton(
+                              onPressed: () {
+                                setModalState(() {
+                                  for (final item in visibleItems) {
+                                    exclude.add(item);
+                                    include.remove(item);
+                                  }
+                                });
+                              },
+                              child: const Text('Exclude visible'),
                             ),
-                          ],
-                        ),
-                      ],
-                    ),
+                          FilledButton(
+                            onPressed: () => Navigator.pop(
+                              context,
+                              _IncludeExcludeSelection<T>(
+                                include: Set<T>.from(include),
+                                exclude: Set<T>.from(exclude),
+                                mode: mode,
+                              ),
+                            ),
+                            child: const Text('Apply'),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -992,13 +986,9 @@ class _SearchAndFiltersRowState extends State<TaskSearchAndFiltersRow> {
   }
 
   Future<void> _showSyntaxHelp(BuildContext context) async {
-    final example = await showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+    final example = await showAppSheet<String>(
+      context,
+      scrollControlled: true,
       builder: (sheetContext) => _SearchSyntaxSheet(examples: _queryExamples),
     );
     if (example != null && mounted) _applyExample(example);
@@ -1381,54 +1371,55 @@ class _SearchSyntaxSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return SafeArea(
-      top: false,
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'Search syntax',
-              style: theme.textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const AppSheetHeader(
+          title: 'Search syntax',
+          subtitle:
               'Use Taskwarrior-style terms to narrow the list. '
               'Separate terms with spaces to require all of them.',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
+        ),
+        Flexible(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpace.lg,
+              0,
+              AppSpace.lg,
+              AppSpace.xl,
             ),
-            const SizedBox(height: 16),
-            _section(theme, 'Tags', _tags),
-            _section(theme, 'Projects', _projects),
-            _section(theme, 'Status and dates', _fields),
-            _section(theme, 'Combining terms', _operators),
-            Text(
-              'Examples',
-              style: theme.textTheme.labelLarge?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                for (final example in examples)
-                  ActionChip(
-                    label: Text(example),
-                    onPressed: () => Navigator.pop(context, example),
+                _section(theme, 'Tags', _tags),
+                _section(theme, 'Projects', _projects),
+                _section(theme, 'Status and dates', _fields),
+                _section(theme, 'Combining terms', _operators),
+                Text(
+                  'Examples',
+                  style: theme.textTheme.labelLarge?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
                   ),
+                ),
+                const SizedBox(height: AppSpace.sm),
+                Wrap(
+                  spacing: AppSpace.sm,
+                  runSpacing: AppSpace.sm,
+                  children: [
+                    for (final example in examples)
+                      ActionChip(
+                        label: Text(example),
+                        onPressed: () => Navigator.pop(context, example),
+                      ),
+                  ],
+                ),
               ],
             ),
-          ],
+          ),
         ),
-      ),
+      ],
     );
   }
 
@@ -1495,7 +1486,7 @@ class _QuerySuggestionDropdown extends StatelessWidget {
     return Material(
       elevation: 2,
       color: theme.colorScheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(AppRadius.control),
       clipBehavior: Clip.antiAlias,
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxHeight: 280),
@@ -1759,135 +1750,137 @@ class _ContextChip {
   ) async {
     final theme = Theme.of(context);
 
-    final result = await showModalBottomSheet<_ContextSheetResult>(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+    final result = await showAppSheet<_ContextSheetResult>(
+      context,
       builder: (ctx) {
         return StatefulBuilder(
           builder: (context, setModalState) {
             final contexts = taskState.contexts;
             final activeId = taskState.activeContext?.id;
 
-            return SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
+            return Padding(
+              padding: const EdgeInsets.only(
+                top: AppSpace.md,
+                bottom: AppSpace.lg,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  AppSheetHeader(
+                    title: 'Context',
+                    trailing: IconButton(
+                      icon: const Icon(Icons.add),
+                      tooltip: 'Define context',
+                      onPressed: () async {
+                        if (await showDefineDialog(context, taskState)) {
+                          setModalState(() {});
+                        }
+                      },
+                    ),
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: AppSpace.lg),
+                    child: Divider(),
+                  ),
+                  if (contexts.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppSpace.lg,
+                        vertical: AppSpace.xl,
+                      ),
+                      child: Center(
+                        child: Column(
+                          children: [
+                            Icon(
+                              Icons.filter_alt_outlined,
+                              size: 48,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'No contexts defined',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            TextButton.icon(
+                              onPressed: () async {
+                                if (await showDefineDialog(
+                                  context,
+                                  taskState,
+                                )) {
+                                  setModalState(() {});
+                                }
+                              },
+                              icon: const Icon(Icons.add),
+                              label: const Text('Define one'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  else
+                    Column(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Expanded(
-                          child: Text(
-                            'Context',
-                            style: theme.textTheme.titleLarge?.copyWith(
-                              fontWeight: FontWeight.bold,
+                        Flexible(
+                          child: SingleChildScrollView(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: contexts
+                                  .map(
+                                    (ctx) => _ContextListTile(
+                                      taskContext: ctx,
+                                      isActive: ctx.id == activeId,
+                                      theme: theme,
+                                      taskState: taskState,
+                                      sheetContext: context,
+                                      setModalState: setModalState,
+                                    ),
+                                  )
+                                  .toList(),
                             ),
                           ),
                         ),
-                        IconButton(
-                          icon: const Icon(Icons.add),
-                          tooltip: 'Define context',
-                          onPressed: () async {
-                            if (await showDefineDialog(context, taskState)) {
-                              setModalState(() {});
-                            }
-                          },
+                        const Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: AppSpace.lg,
+                          ),
+                          child: Divider(),
+                        ),
+                        ListTile(
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: AppSpace.lg,
+                          ),
+                          leading: Icon(
+                            activeId == null
+                                ? Icons.radio_button_checked
+                                : Icons.radio_button_unchecked,
+                            color: activeId == null
+                                ? theme.colorScheme.primary
+                                : theme.colorScheme.onSurfaceVariant,
+                          ),
+                          title: Text(
+                            'None (clear context)',
+                            style: TextStyle(
+                              fontWeight: activeId == null
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                              color: activeId == null
+                                  ? theme.colorScheme.primary
+                                  : null,
+                            ),
+                          ),
+                          onTap: () => Navigator.pop(
+                            context,
+                            const _ContextSheetResult.clear(),
+                          ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 8),
-                    const Divider(),
-                    if (contexts.isEmpty)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 24),
-                        child: Center(
-                          child: Column(
-                            children: [
-                              Icon(
-                                Icons.filter_alt_outlined,
-                                size: 48,
-                                color: theme.colorScheme.onSurfaceVariant,
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                'No contexts defined',
-                                style: theme.textTheme.bodyMedium?.copyWith(
-                                  color: theme.colorScheme.onSurfaceVariant,
-                                ),
-                              ),
-                              const SizedBox(height: 16),
-                              TextButton.icon(
-                                onPressed: () async {
-                                  if (await showDefineDialog(
-                                    context,
-                                    taskState,
-                                  )) {
-                                    setModalState(() {});
-                                  }
-                                },
-                                icon: const Icon(Icons.add),
-                                label: const Text('Define one'),
-                              ),
-                            ],
-                          ),
-                        ),
-                      )
-                    else
-                      Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Flexible(
-                            child: SingleChildScrollView(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: contexts
-                                    .map(
-                                      (ctx) => _ContextListTile(
-                                        taskContext: ctx,
-                                        isActive: ctx.id == activeId,
-                                        theme: theme,
-                                        taskState: taskState,
-                                        sheetContext: context,
-                                        setModalState: setModalState,
-                                      ),
-                                    )
-                                    .toList(),
-                              ),
-                            ),
-                          ),
-                          const Divider(),
-                          ListTile(
-                            leading: Icon(
-                              activeId == null
-                                  ? Icons.radio_button_checked
-                                  : Icons.radio_button_unchecked,
-                              color: activeId == null
-                                  ? theme.colorScheme.primary
-                                  : theme.colorScheme.onSurfaceVariant,
-                            ),
-                            title: Text(
-                              'None (clear context)',
-                              style: TextStyle(
-                                fontWeight: activeId == null
-                                    ? FontWeight.bold
-                                    : FontWeight.normal,
-                                color: activeId == null
-                                    ? theme.colorScheme.primary
-                                    : null,
-                              ),
-                            ),
-                            onTap: () => Navigator.pop(
-                              context,
-                              const _ContextSheetResult.clear(),
-                            ),
-                          ),
-                        ],
-                      ),
-                  ],
-                ),
+                ],
               ),
             );
           },
@@ -1943,6 +1936,7 @@ class _ContextListTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpace.lg),
       leading: Icon(
         isActive ? Icons.radio_button_checked : Icons.radio_button_unchecked,
         color: isActive
@@ -1988,74 +1982,46 @@ class _ContextListTile extends StatelessWidget {
   }
 
   Future<void> _showContextOptions() async {
-    final action = await showModalBottomSheet<_ContextAction>(
-      context: sheetContext,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+    final action = await showAppSheet<_ContextAction>(
+      sheetContext,
       builder: (context) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 12),
-              Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.onSurfaceVariant.withValues(
-                    alpha: 0.4,
-                  ),
-                  borderRadius: BorderRadius.circular(2),
-                ),
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AppSheetHeader(title: taskContext.name),
+            ListTile(
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: AppSpace.lg,
               ),
-              const SizedBox(height: 16),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        taskContext.name,
-                        style: theme.textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+              leading: Icon(
+                Icons.edit_outlined,
+                color: theme.colorScheme.primary,
               ),
-              const SizedBox(height: 8),
-              ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 24),
-                leading: Icon(
-                  Icons.edit_outlined,
-                  color: theme.colorScheme.primary,
-                ),
-                title: const Text(
-                  'Edit',
-                  style: TextStyle(fontWeight: FontWeight.w500),
-                ),
-                onTap: () => Navigator.pop(context, _ContextAction.edit),
+              title: const Text(
+                'Edit',
+                style: TextStyle(fontWeight: FontWeight.w500),
               ),
-              ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 24),
-                leading: Icon(
-                  Icons.delete_outline,
+              onTap: () => Navigator.pop(context, _ContextAction.edit),
+            ),
+            ListTile(
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: AppSpace.lg,
+              ),
+              leading: Icon(
+                Icons.delete_outline,
+                color: theme.colorScheme.error,
+              ),
+              title: Text(
+                'Delete',
+                style: TextStyle(
+                  fontWeight: FontWeight.w500,
                   color: theme.colorScheme.error,
                 ),
-                title: Text(
-                  'Delete',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w500,
-                    color: theme.colorScheme.error,
-                  ),
-                ),
-                onTap: () => Navigator.pop(context, _ContextAction.delete),
               ),
-              const SizedBox(height: 16),
-            ],
-          ),
+              onTap: () => Navigator.pop(context, _ContextAction.delete),
+            ),
+            const SizedBox(height: AppSpace.lg),
+          ],
         );
       },
     );

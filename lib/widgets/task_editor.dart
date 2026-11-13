@@ -4,6 +4,8 @@ import 'package:provider/provider.dart';
 import 'package:taskdroid/models/task_virtual_flags.dart';
 import 'package:taskdroid/providers/task_state.dart';
 import 'package:taskdroid/src/rust/api.dart';
+import 'package:taskdroid/theme/tokens.dart';
+import 'package:taskdroid/widgets/common/app_sheet.dart';
 import 'package:taskdroid/widgets/tag_input.dart';
 import 'package:taskdroid/widgets/task_selector.dart';
 import 'package:taskdroid/widgets/uda_editor.dart';
@@ -16,20 +18,14 @@ Future<TaskEditorResult?> showTaskEditorSheet(
   TaskEditorMode mode = TaskEditorMode.normal,
   TaskEditorInitialValues? initialValues,
 }) {
-  return showModalBottomSheet<TaskEditorResult>(
-    context: context,
-    isScrollControlled: true,
-    backgroundColor: Theme.of(context).colorScheme.surface,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-    ),
-    builder: (ctx) => FractionallySizedBox(
-      heightFactor: 0.92,
-      child: TaskEditor(
-        originalTask: originalTask,
-        mode: mode,
-        initialValues: initialValues,
-      ),
+  return showAppSheet<TaskEditorResult>(
+    context,
+    scrollControlled: true,
+    heightFactor: 0.92,
+    builder: (ctx) => TaskEditor(
+      originalTask: originalTask,
+      mode: mode,
+      initialValues: initialValues,
     ),
   );
 }
@@ -265,17 +261,11 @@ class _TaskEditorState extends State<TaskEditor>
     if (widget.originalTask != null) excluded.add(widget.originalTask!.uuid);
     excluded.addAll(_currentDependencies);
 
-    final selectedUuid = await showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      builder: (context) => FractionallySizedBox(
-        heightFactor: 0.8,
-        child: TaskSelector(excludedUuids: excluded),
-      ),
+    final selectedUuid = await showAppSheet<String>(
+      context,
+      scrollControlled: true,
+      heightFactor: 0.8,
+      builder: (context) => TaskSelector(excludedUuids: excluded),
     );
 
     if (selectedUuid != null && mounted) {
@@ -296,30 +286,16 @@ class _TaskEditorState extends State<TaskEditor>
 
     return Column(
       children: [
-        // Drag Handle
-        Container(
-          width: 32,
-          height: 4,
-          margin: const EdgeInsets.only(top: 12, bottom: 8),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
-            borderRadius: BorderRadius.circular(2),
-          ),
-        ),
-
-        // Header
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
-          child: Text(
-            title,
-            style: theme.textTheme.titleLarge?.copyWith(
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ),
+        // Header (the drag handle comes from the theme)
+        AppSheetHeader(title: title),
         if (widget.mode != TaskEditorMode.normal)
           Padding(
-            padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
+            padding: const EdgeInsets.fromLTRB(
+              AppSpace.lg,
+              0,
+              AppSpace.lg,
+              AppSpace.md,
+            ),
             child: _buildModeBanner(theme),
           ),
 
@@ -356,7 +332,12 @@ class _TaskEditorState extends State<TaskEditor>
 
         // Footer Actions
         Container(
-          padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+          padding: const EdgeInsets.fromLTRB(
+            AppSpace.lg,
+            AppSpace.lg,
+            AppSpace.lg,
+            32,
+          ),
           decoration: BoxDecoration(
             color: theme.colorScheme.surface,
             border: Border(
@@ -372,8 +353,8 @@ class _TaskEditorState extends State<TaskEditor>
                 onPressed: () => Navigator.pop(context),
                 style: TextButton.styleFrom(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 12,
+                    horizontal: AppSpace.lg,
+                    vertical: AppSpace.md,
                   ),
                 ),
                 child: const Text(
@@ -482,7 +463,7 @@ class _TaskEditorState extends State<TaskEditor>
     Set<String> allTags,
   ) {
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.all(AppSpace.lg),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -637,7 +618,7 @@ class _TaskEditorState extends State<TaskEditor>
 
   Widget _buildAdvancedTab(ThemeData theme) {
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.all(AppSpace.lg),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

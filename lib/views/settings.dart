@@ -11,9 +11,11 @@ import 'package:taskdroid/services/calendar_service.dart';
 import 'package:taskdroid/services/profile_storage.dart';
 import 'package:taskdroid/services/storage_locations.dart';
 import 'package:taskdroid/services/storage_permissions.dart';
+import 'package:taskdroid/theme/tokens.dart';
 import 'package:taskdroid/widgets/app_drawer.dart';
 import 'package:taskdroid/widgets/common/app_section_card.dart';
 import 'package:taskdroid/widgets/common/app_section_header.dart';
+import 'package:taskdroid/widgets/common/app_sheet.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -430,41 +432,43 @@ class _SettingsPageState extends State<SettingsPage> {
     final currentPath = await getGlobalStoragePath();
     if (!context.mounted) return;
 
-    final result = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
+    final result = await showAppSheet<String>(
+      context,
       builder: (ctx) {
-        return SafeArea(
-          child: ListView.separated(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
-            itemBuilder: (context, index) {
-              if (index == locations.length) {
-                return ListTile(
-                  leading: const Icon(Icons.folder_open_rounded),
-                  title: const Text(
-                    'Pick a folder from device…',
-                    style: TextStyle(fontWeight: FontWeight.w500),
-                  ),
-                  subtitle: const Text('Browse internal storage'),
-                  onTap: () => Navigator.pop(ctx, '__picker__'),
-                );
-              }
-              final location = locations[index];
-              final isSelected = currentPath == location.path;
-              return ListTile(
-                title: Text(location.label),
-                subtitle: Text(
-                  location.path,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                trailing: isSelected ? const Icon(Icons.check_rounded) : null,
-                onTap: () => Navigator.pop(ctx, location.path),
-              );
-            },
-            separatorBuilder: (_, _) => const Divider(height: 1),
-            itemCount: locations.length + 1,
+        return ListView.separated(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpace.lg,
+            AppSpace.sm,
+            AppSpace.lg,
+            AppSpace.xl,
           ),
+          itemBuilder: (context, index) {
+            if (index == locations.length) {
+              return ListTile(
+                leading: const Icon(Icons.folder_open_rounded),
+                title: const Text(
+                  'Pick a folder from device…',
+                  style: TextStyle(fontWeight: FontWeight.w500),
+                ),
+                subtitle: const Text('Browse internal storage'),
+                onTap: () => Navigator.pop(ctx, '__picker__'),
+              );
+            }
+            final location = locations[index];
+            final isSelected = currentPath == location.path;
+            return ListTile(
+              title: Text(location.label),
+              subtitle: Text(
+                location.path,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: isSelected ? const Icon(Icons.check_rounded) : null,
+              onTap: () => Navigator.pop(ctx, location.path),
+            );
+          },
+          separatorBuilder: (_, _) => const Divider(height: 1),
+          itemCount: locations.length + 1,
         );
       },
     );
@@ -718,44 +722,37 @@ class _SettingsPageState extends State<SettingsPage> {
       return;
     }
 
-    final selected = await showModalBottomSheet<_CalendarChoice>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheetContext) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
+    final selected = await showAppSheet<_CalendarChoice>(
+      context,
+      builder: (sheetContext) => ListView(
+        shrinkWrap: true,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.auto_awesome_outlined),
+            title: const Text('Default writable calendar'),
+            subtitle: const Text('Use Android primary calendar when possible'),
+            onTap: () =>
+                Navigator.pop(sheetContext, const _CalendarChoice.useDefault()),
+          ),
+          const Divider(height: 1),
+          for (final calendar in calendars)
             ListTile(
-              leading: const Icon(Icons.auto_awesome_outlined),
-              title: const Text('Default writable calendar'),
-              subtitle: const Text(
-                'Use Android primary calendar when possible',
+              title: Text(calendar.name),
+              subtitle: Text(
+                [
+                  if (calendar.accountName.isNotEmpty) calendar.accountName,
+                  if (calendar.isPrimary) 'Primary',
+                ].join(' • '),
               ),
+              trailing: profileState.currentProfile?.calendarId == calendar.id
+                  ? const Icon(Icons.check)
+                  : null,
               onTap: () => Navigator.pop(
                 sheetContext,
-                const _CalendarChoice.useDefault(),
+                _CalendarChoice.selected(calendar),
               ),
             ),
-            const Divider(height: 1),
-            for (final calendar in calendars)
-              ListTile(
-                title: Text(calendar.name),
-                subtitle: Text(
-                  [
-                    if (calendar.accountName.isNotEmpty) calendar.accountName,
-                    if (calendar.isPrimary) 'Primary',
-                  ].join(' • '),
-                ),
-                trailing: profileState.currentProfile?.calendarId == calendar.id
-                    ? const Icon(Icons.check)
-                    : null,
-                onTap: () => Navigator.pop(
-                  sheetContext,
-                  _CalendarChoice.selected(calendar),
-                ),
-              ),
-          ],
-        ),
+        ],
       ),
     );
 

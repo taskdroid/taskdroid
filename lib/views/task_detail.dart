@@ -6,7 +6,9 @@ import 'package:taskdroid/providers/profile_state.dart';
 import 'package:taskdroid/providers/task_state.dart';
 import 'package:taskdroid/services/calendar_service.dart';
 import 'package:taskdroid/src/rust/api.dart';
+import 'package:taskdroid/theme/tokens.dart';
 import 'package:taskdroid/widgets/common/app_section_header.dart';
+import 'package:taskdroid/widgets/common/app_sheet.dart';
 import 'package:taskdroid/widgets/task_editor.dart';
 
 enum SeriesScope { single, entire }
@@ -238,7 +240,7 @@ class _TaskDetailContent extends StatelessWidget {
         color: isStarted
             ? colorScheme.primaryContainer
             : colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(AppRadius.card),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1031,8 +1033,8 @@ class _TaskDetailContent extends StatelessWidget {
     final taskState = context.read<TaskState>();
 
     if (task.isRecurringTemplate || task.isRecurringInstance) {
-      final scope = await showModalBottomSheet<SeriesScope>(
-        context: context,
+      final scope = await showAppSheet<SeriesScope>(
+        context,
         builder: (ctx) => Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1141,26 +1143,24 @@ class _TaskDetailContent extends StatelessWidget {
   }
 
   Future<SeriesScope?> _chooseRecurringEditScope(BuildContext context) {
-    return showModalBottomSheet<SeriesScope>(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.event_available_outlined),
-              title: const Text('This instance only'),
-              subtitle: const Text('Change just this occurrence'),
-              onTap: () => Navigator.pop(ctx, SeriesScope.single),
-            ),
-            ListTile(
-              leading: const Icon(Icons.all_inclusive),
-              title: const Text('Entire series'),
-              subtitle: const Text('Update the template and pending instances'),
-              onTap: () => Navigator.pop(ctx, SeriesScope.entire),
-            ),
-          ],
-        ),
+    return showAppSheet<SeriesScope>(
+      context,
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.event_available_outlined),
+            title: const Text('This instance only'),
+            subtitle: const Text('Change just this occurrence'),
+            onTap: () => Navigator.pop(ctx, SeriesScope.single),
+          ),
+          ListTile(
+            leading: const Icon(Icons.all_inclusive),
+            title: const Text('Entire series'),
+            subtitle: const Text('Update the template and pending instances'),
+            onTap: () => Navigator.pop(ctx, SeriesScope.entire),
+          ),
+        ],
       ),
     );
   }
@@ -1346,7 +1346,10 @@ class _CalendarSyncStatusState extends State<_CalendarSyncStatus> {
       ),
       child: Row(
         children: [
-          if (leading != null) leading else Icon(icon, size: 18, color: iconColor),
+          if (leading != null)
+            leading
+          else
+            Icon(icon, size: 18, color: iconColor),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
