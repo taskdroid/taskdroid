@@ -676,216 +676,212 @@ class _HomePageState extends State<HomePage>
             }).toList();
 
             final mediaQuery = MediaQuery.of(context);
-            return AnimatedPadding(
-              duration: const Duration(milliseconds: 180),
-              curve: Curves.easeOut,
-              padding: EdgeInsets.only(bottom: mediaQuery.viewInsets.bottom),
-              child: Padding(
-                padding: const EdgeInsets.all(AppSpace.lg),
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxHeight: mediaQuery.size.height * 0.85,
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: theme.textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
+            return Padding(
+              padding: const EdgeInsets.all(AppSpace.lg),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: mediaQuery.size.height * 0.85,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
                       ),
-                      const SizedBox(height: 16),
-                      if (enableModeToggle) ...[
-                        Row(
-                          children: [
-                            Text(
-                              modeLabel,
-                              style: theme.textTheme.bodyMedium?.copyWith(
-                                color: theme.colorScheme.onSurfaceVariant,
-                              ),
-                            ),
-                            const Spacer(),
-                            IconButton.outlined(
-                              onPressed: () {
-                                setModalState(() {
-                                  mode = mode == FilterMatchMode.and
-                                      ? FilterMatchMode.or
-                                      : FilterMatchMode.and;
-                                });
-                              },
-                              icon: const Icon(Icons.sync_alt),
-                              tooltip: 'Toggle AND/OR',
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              mode.name.toUpperCase(),
-                              style: theme.textTheme.labelLarge,
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                      ],
-                      TextField(
-                        decoration: const InputDecoration(
-                          hintText: 'Search items...',
-                          prefixIcon: Icon(Icons.search, size: 18),
-                          isDense: true,
-                        ),
-                        onChanged: (value) {
-                          setModalState(() {
-                            itemSearch = value;
-                          });
-                        },
-                      ),
-                      const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
+                    ),
+                    const SizedBox(height: 16),
+                    if (enableModeToggle) ...[
+                      Row(
                         children: [
-                          Chip(
-                            avatar: const Icon(Icons.add, size: 14),
-                            label: const Text('Include'),
-                            visualDensity: VisualDensity.compact,
-                            backgroundColor: theme.colorScheme.primaryContainer,
-                          ),
-                          Chip(
-                            avatar: const Icon(Icons.remove, size: 14),
-                            label: const Text('Exclude'),
-                            visualDensity: VisualDensity.compact,
-                            backgroundColor: theme.colorScheme.errorContainer,
-                          ),
-                          Chip(
-                            avatar: const Icon(
-                              Icons.radio_button_unchecked,
-                              size: 14,
+                          Text(
+                            modeLabel,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
                             ),
-                            label: const Text('Off'),
-                            visualDensity: VisualDensity.compact,
+                          ),
+                          const Spacer(),
+                          IconButton.outlined(
+                            onPressed: () {
+                              setModalState(() {
+                                mode = mode == FilterMatchMode.and
+                                    ? FilterMatchMode.or
+                                    : FilterMatchMode.and;
+                              });
+                            },
+                            icon: const Icon(Icons.sync_alt),
+                            tooltip: 'Toggle AND/OR',
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            mode.name.toUpperCase(),
+                            style: theme.textTheme.labelLarge,
                           ),
                         ],
                       ),
-                      if (allItems.isEmpty) ...[
-                        const SizedBox(height: 16),
-                        const Text('No items available'),
-                      ] else ...[
-                        const SizedBox(height: 16),
-                        Flexible(
-                          child: SingleChildScrollView(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Tap each item to cycle include/exclude/off',
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: theme.colorScheme.onSurfaceVariant,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                if (visibleItems.isEmpty)
-                                  const Text('No items match your search')
-                                else
-                                  Wrap(
-                                    spacing: 8,
-                                    runSpacing: 8,
-                                    children: visibleItems.map((item) {
-                                      final state = stateFor(item);
-                                      final isActive =
-                                          state != _FilterSelectionState.none;
-                                      final avatar = switch (state) {
-                                        _FilterSelectionState.include =>
-                                          const Icon(Icons.add, size: 14),
-                                        _FilterSelectionState.exclude =>
-                                          const Icon(Icons.remove, size: 14),
-                                        _FilterSelectionState.none =>
-                                          const Icon(
-                                            Icons.radio_button_unchecked,
-                                            size: 14,
-                                          ),
-                                      };
-                                      final selectedColor = switch (state) {
-                                        _FilterSelectionState.include =>
-                                          theme.colorScheme.primaryContainer,
-                                        _FilterSelectionState.exclude =>
-                                          theme.colorScheme.errorContainer,
-                                        _FilterSelectionState.none =>
-                                          theme
-                                              .colorScheme
-                                              .surfaceContainerHighest,
-                                      };
-                                      return FilterChip(
-                                        avatar: avatar,
-                                        label: Text(itemLabel(item)),
-                                        selected: isActive,
-                                        selectedColor: selectedColor,
-                                        onSelected: (_) {
-                                          setModalState(() {
-                                            cycleState(item);
-                                          });
-                                        },
-                                      );
-                                    }).toList(),
-                                  ),
-                              ],
-                            ),
+                      const SizedBox(height: 8),
+                    ],
+                    TextField(
+                      decoration: const InputDecoration(
+                        hintText: 'Search items...',
+                        prefixIcon: Icon(Icons.search, size: 18),
+                        isDense: true,
+                      ),
+                      onChanged: (value) {
+                        setModalState(() {
+                          itemSearch = value;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        Chip(
+                          avatar: const Icon(Icons.add, size: 14),
+                          label: const Text('Include'),
+                          visualDensity: VisualDensity.compact,
+                          backgroundColor: theme.colorScheme.primaryContainer,
+                        ),
+                        Chip(
+                          avatar: const Icon(Icons.remove, size: 14),
+                          label: const Text('Exclude'),
+                          visualDensity: VisualDensity.compact,
+                          backgroundColor: theme.colorScheme.errorContainer,
+                        ),
+                        Chip(
+                          avatar: const Icon(
+                            Icons.radio_button_unchecked,
+                            size: 14,
                           ),
+                          label: const Text('Off'),
+                          visualDensity: VisualDensity.compact,
                         ),
                       ],
+                    ),
+                    if (allItems.isEmpty) ...[
                       const SizedBox(height: 16),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        alignment: WrapAlignment.end,
-                        children: [
+                      const Text('No items available'),
+                    ] else ...[
+                      const SizedBox(height: 16),
+                      Flexible(
+                        child: SingleChildScrollView(
+                          keyboardDismissBehavior:
+                              ScrollViewKeyboardDismissBehavior.onDrag,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Tap each item to cycle include/exclude/off',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              if (visibleItems.isEmpty)
+                                const Text('No items match your search')
+                              else
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: visibleItems.map((item) {
+                                    final state = stateFor(item);
+                                    final isActive =
+                                        state != _FilterSelectionState.none;
+                                    final avatar = switch (state) {
+                                      _FilterSelectionState.include =>
+                                        const Icon(Icons.add, size: 14),
+                                      _FilterSelectionState.exclude =>
+                                        const Icon(Icons.remove, size: 14),
+                                      _FilterSelectionState.none => const Icon(
+                                        Icons.radio_button_unchecked,
+                                        size: 14,
+                                      ),
+                                    };
+                                    final selectedColor = switch (state) {
+                                      _FilterSelectionState.include =>
+                                        theme.colorScheme.primaryContainer,
+                                      _FilterSelectionState.exclude =>
+                                        theme.colorScheme.errorContainer,
+                                      _FilterSelectionState.none =>
+                                        theme
+                                            .colorScheme
+                                            .surfaceContainerHighest,
+                                    };
+                                    return FilterChip(
+                                      avatar: avatar,
+                                      label: Text(itemLabel(item)),
+                                      selected: isActive,
+                                      selectedColor: selectedColor,
+                                      onSelected: (_) {
+                                        setModalState(() {
+                                          cycleState(item);
+                                        });
+                                      },
+                                    );
+                                  }).toList(),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      alignment: WrapAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed: () {
+                            setModalState(() {
+                              include.clear();
+                              exclude.clear();
+                            });
+                          },
+                          child: const Text('Clear'),
+                        ),
+                        if (visibleItems.isNotEmpty)
                           TextButton(
                             onPressed: () {
                               setModalState(() {
-                                include.clear();
-                                exclude.clear();
+                                for (final item in visibleItems) {
+                                  include.add(item);
+                                  exclude.remove(item);
+                                }
                               });
                             },
-                            child: const Text('Clear'),
+                            child: const Text('Include visible'),
                           ),
-                          if (visibleItems.isNotEmpty)
-                            TextButton(
-                              onPressed: () {
-                                setModalState(() {
-                                  for (final item in visibleItems) {
-                                    include.add(item);
-                                    exclude.remove(item);
-                                  }
-                                });
-                              },
-                              child: const Text('Include visible'),
-                            ),
-                          if (visibleItems.isNotEmpty)
-                            TextButton(
-                              onPressed: () {
-                                setModalState(() {
-                                  for (final item in visibleItems) {
-                                    exclude.add(item);
-                                    include.remove(item);
-                                  }
-                                });
-                              },
-                              child: const Text('Exclude visible'),
-                            ),
-                          FilledButton(
-                            onPressed: () => Navigator.pop(
-                              context,
-                              _IncludeExcludeSelection<T>(
-                                include: Set<T>.from(include),
-                                exclude: Set<T>.from(exclude),
-                                mode: mode,
-                              ),
-                            ),
-                            child: const Text('Apply'),
+                        if (visibleItems.isNotEmpty)
+                          TextButton(
+                            onPressed: () {
+                              setModalState(() {
+                                for (final item in visibleItems) {
+                                  exclude.add(item);
+                                  include.remove(item);
+                                }
+                              });
+                            },
+                            child: const Text('Exclude visible'),
                           ),
-                        ],
-                      ),
-                    ],
-                  ),
+                        FilledButton(
+                          onPressed: () => Navigator.pop(
+                            context,
+                            _IncludeExcludeSelection<T>(
+                              include: Set<T>.from(include),
+                              exclude: Set<T>.from(exclude),
+                              mode: mode,
+                            ),
+                          ),
+                          child: const Text('Apply'),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
             );

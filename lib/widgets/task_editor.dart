@@ -332,12 +332,7 @@ class _TaskEditorState extends State<TaskEditor>
 
         // Footer Actions
         Container(
-          padding: const EdgeInsets.fromLTRB(
-            AppSpace.lg,
-            AppSpace.lg,
-            AppSpace.lg,
-            32,
-          ),
+          padding: const EdgeInsets.all(AppSpace.lg),
           decoration: BoxDecoration(
             color: theme.colorScheme.surface,
             border: Border(
@@ -463,6 +458,7 @@ class _TaskEditorState extends State<TaskEditor>
     Set<String> allTags,
   ) {
     return SingleChildScrollView(
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: const EdgeInsets.all(AppSpace.lg),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -608,9 +604,7 @@ class _TaskEditorState extends State<TaskEditor>
             }),
           ),
 
-          SizedBox(
-            height: MediaQuery.of(context).viewInsets.bottom > 0 ? 0 : 40,
-          ),
+          const SizedBox(height: AppSpace.xl),
         ],
       ),
     );
@@ -618,6 +612,7 @@ class _TaskEditorState extends State<TaskEditor>
 
   Widget _buildAdvancedTab(ThemeData theme) {
     return SingleChildScrollView(
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: const EdgeInsets.all(AppSpace.lg),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -805,9 +800,7 @@ class _TaskEditorState extends State<TaskEditor>
             initialUdas: _currentUdas,
             onChanged: (newList) => _currentUdas = newList,
           ),
-          SizedBox(
-            height: MediaQuery.of(context).viewInsets.bottom > 0 ? 0 : 40,
-          ),
+          const SizedBox(height: AppSpace.xl),
         ],
       ),
     );

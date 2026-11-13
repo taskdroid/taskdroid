@@ -91,6 +91,8 @@ class _TaskSelectorState extends State<TaskSelector> {
                       }
 
                       return ListView.separated(
+                        keyboardDismissBehavior:
+                            ScrollViewKeyboardDismissBehavior.onDrag,
                         physics: const BouncingScrollPhysics(),
                         itemCount: tasks.length,
                         separatorBuilder: (_, _) =>

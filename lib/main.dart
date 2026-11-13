@@ -11,6 +11,7 @@ import 'package:taskdroid/views/credentials.dart';
 import 'package:taskdroid/views/settings.dart';
 import 'package:taskdroid/views/data_management.dart';
 import 'package:taskdroid/theme/app_theme.dart';
+import 'package:taskdroid/widgets/common/app_sheet.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -48,6 +49,10 @@ class MyApp extends StatelessWidget {
           theme: buildAppTheme(Brightness.light),
           darkTheme: buildAppTheme(Brightness.dark),
           themeMode: appState.isDarkTheme ? ThemeMode.dark : ThemeMode.light,
+          // Tapping dead space anywhere dismisses the keyboard, sheets
+          // included. Buttons, list tiles and fields win the gesture arena;
+          // only taps that nothing else claims reach this.
+          builder: (context, child) => AppTapToDismiss(child: child),
           initialRoute: '/',
           routes: {
             '/': (context) => const HomePage(),

@@ -196,6 +196,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
   Widget _buildNameStep(ThemeData theme) {
     return Center(
       child: SingleChildScrollView(
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         padding: const EdgeInsets.symmetric(horizontal: 32),
         child: Form(
           key: _nameFormKey,
@@ -602,6 +603,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
   Widget _buildSyncStep(ThemeData theme) {
     return Center(
       child: SingleChildScrollView(
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         padding: const EdgeInsets.symmetric(horizontal: 32),
         child: Form(
           key: _syncFormKey,

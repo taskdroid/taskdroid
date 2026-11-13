@@ -1,9 +1,31 @@
 import 'package:flutter/material.dart';
 import 'package:taskdroid/theme/tokens.dart';
 
+/// Dismisses the keyboard when a tap lands on space no other widget claims.
+///
+/// Install this once, around the whole app (in `MaterialApp.builder`), so it
+/// covers routes and the Navigator overlay, sheets included. Buttons, list
+/// tiles and fields win the gesture arena; only unclaimed taps reach this.
+/// `onTap` (not a pointer listener) so tapping another field does not blink the
+/// keyboard. Sheets must not add a layer of their own.
+class AppTapToDismiss extends StatelessWidget {
+  const AppTapToDismiss({super.key, this.child});
+
+  final Widget? child;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+      child: child,
+    );
+  }
+}
+
 /// The only way to open a bottom sheet in this app. Shape, drag handle,
-/// clipping and safe area come from the theme and this helper; call sites
-/// supply content only.
+/// clipping, safe area and keyboard avoidance come from the theme and this
+/// helper; call sites supply content only.
 Future<T?> showAppSheet<T>(
   BuildContext context, {
   required WidgetBuilder builder,
@@ -15,9 +37,27 @@ Future<T?> showAppSheet<T>(
     isScrollControlled: scrollControlled,
     useSafeArea: true,
     builder: (sheetContext) {
-      final content = SafeArea(top: false, child: builder(sheetContext));
-      if (heightFactor == null) return content;
-      return FractionallySizedBox(heightFactor: heightFactor, child: content);
+      Widget content = SafeArea(top: false, child: builder(sheetContext));
+
+      if (heightFactor != null) {
+        content = FractionallySizedBox(
+          heightFactor: heightFactor,
+          child: content,
+        );
+      }
+
+      // `showModalBottomSheet` anchors the sheet to the bottom of the screen and
+      // ignores `viewInsets`, so lift it ourselves. Done outside the
+      // `FractionallySizedBox` so a fractional sheet is a fraction of the space
+      // the keyboard leaves over.
+      return AnimatedPadding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.viewInsetsOf(sheetContext).bottom,
+        ),
+        duration: AppMotion.of(sheetContext, AppMotion.normal),
+        curve: AppMotion.standard,
+        child: content,
+      );
     },
   );
 }

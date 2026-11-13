@@ -299,6 +299,7 @@ class _CredentialsPageState extends State<CredentialsPage> {
       body: Consumer<ProfileState>(
         builder: (context, profileState, _) {
           return SingleChildScrollView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
             child: Form(
               key: _formKey,
