@@ -17,6 +17,7 @@ import 'package:taskdroid/theme/tokens.dart';
 import 'package:taskdroid/views/onboarding.dart';
 import 'package:taskdroid/widgets/app_drawer.dart';
 import 'package:taskdroid/widgets/common/app_sheet.dart';
+import 'package:taskdroid/widgets/context_editor_sheet.dart';
 import 'package:taskdroid/widgets/filter_tabs.dart';
 import 'package:taskdroid/widgets/task_list.dart';
 import 'package:taskdroid/widgets/task_editor.dart';
@@ -676,25 +677,42 @@ class _HomePageState extends State<HomePage>
             }).toList();
 
             final mediaQuery = MediaQuery.of(context);
-            return Padding(
-              padding: const EdgeInsets.all(AppSpace.lg),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxHeight: mediaQuery.size.height * 0.85,
+            final quickActionStyle = TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: AppSpace.sm),
+              visualDensity: VisualDensity.compact,
+            );
+
+            void apply() {
+              Navigator.pop(
+                context,
+                _IncludeExcludeSelection<T>(
+                  include: Set<T>.from(include),
+                  exclude: Set<T>.from(exclude),
+                  mode: mode,
                 ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: theme.textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.bold,
+              );
+            }
+
+            return ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: mediaQuery.size.height * 0.85,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  AppSheetActionBar(
+                    title: title,
+                    onCancel: () => Navigator.pop(context),
+                    actionLabel: 'Apply',
+                    onAction: apply,
+                  ),
+                  if (enableModeToggle) ...[
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppSpace.lg,
                       ),
-                    ),
-                    const SizedBox(height: 16),
-                    if (enableModeToggle) ...[
-                      Row(
+                      child: Row(
                         children: [
                           Text(
                             modeLabel,
@@ -714,16 +732,21 @@ class _HomePageState extends State<HomePage>
                             icon: const Icon(Icons.sync_alt),
                             tooltip: 'Toggle AND/OR',
                           ),
-                          const SizedBox(width: 8),
+                          const SizedBox(width: AppSpace.sm),
                           Text(
                             mode.name.toUpperCase(),
                             style: theme.textTheme.labelLarge,
                           ),
                         ],
                       ),
-                      const SizedBox(height: 8),
-                    ],
-                    TextField(
+                    ),
+                    const SizedBox(height: AppSpace.sm),
+                  ],
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpace.lg,
+                    ),
+                    child: TextField(
                       decoration: const InputDecoration(
                         hintText: 'Search items...',
                         prefixIcon: Icon(Icons.search, size: 18),
@@ -735,10 +758,62 @@ class _HomePageState extends State<HomePage>
                         });
                       },
                     ),
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpace.lg,
+                    ),
+                    child: Wrap(
+                      alignment: WrapAlignment.end,
+                      spacing: AppSpace.sm,
+                      runSpacing: AppSpace.sm,
+                      children: [
+                        TextButton(
+                          style: quickActionStyle,
+                          onPressed: () {
+                            setModalState(() {
+                              include.clear();
+                              exclude.clear();
+                            });
+                          },
+                          child: const Text('Clear'),
+                        ),
+                        if (visibleItems.isNotEmpty)
+                          TextButton(
+                            style: quickActionStyle,
+                            onPressed: () {
+                              setModalState(() {
+                                for (final item in visibleItems) {
+                                  include.add(item);
+                                  exclude.remove(item);
+                                }
+                              });
+                            },
+                            child: const Text('Include visible'),
+                          ),
+                        if (visibleItems.isNotEmpty)
+                          TextButton(
+                            style: quickActionStyle,
+                            onPressed: () {
+                              setModalState(() {
+                                for (final item in visibleItems) {
+                                  exclude.add(item);
+                                  include.remove(item);
+                                }
+                              });
+                            },
+                            child: const Text('Exclude visible'),
+                          ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpace.lg,
+                    ),
+                    child: Wrap(
+                      spacing: AppSpace.sm,
+                      runSpacing: AppSpace.sm,
                       children: [
                         Chip(
                           avatar: const Icon(Icons.add, size: 14),
@@ -762,127 +837,84 @@ class _HomePageState extends State<HomePage>
                         ),
                       ],
                     ),
-                    if (allItems.isEmpty) ...[
-                      const SizedBox(height: 16),
-                      const Text('No items available'),
-                    ] else ...[
-                      const SizedBox(height: 16),
-                      Flexible(
-                        child: SingleChildScrollView(
-                          keyboardDismissBehavior:
-                              ScrollViewKeyboardDismissBehavior.onDrag,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Tap each item to cycle include/exclude/off',
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: theme.colorScheme.onSurfaceVariant,
-                                ),
+                  ),
+                  if (allItems.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.all(AppSpace.lg),
+                      child: const Text('No items available'),
+                    )
+                  else
+                    Flexible(
+                      child: SingleChildScrollView(
+                        keyboardDismissBehavior:
+                            ScrollViewKeyboardDismissBehavior.onDrag,
+                        padding: const EdgeInsets.fromLTRB(
+                          AppSpace.lg,
+                          AppSpace.md,
+                          AppSpace.lg,
+                          0,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Tap each item to cycle include/exclude/off',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
                               ),
-                              const SizedBox(height: 8),
-                              if (visibleItems.isEmpty)
-                                const Text('No items match your search')
-                              else
-                                Wrap(
-                                  spacing: 8,
-                                  runSpacing: 8,
-                                  children: visibleItems.map((item) {
-                                    final state = stateFor(item);
-                                    final isActive =
-                                        state != _FilterSelectionState.none;
-                                    final avatar = switch (state) {
-                                      _FilterSelectionState.include =>
-                                        const Icon(Icons.add, size: 14),
-                                      _FilterSelectionState.exclude =>
-                                        const Icon(Icons.remove, size: 14),
-                                      _FilterSelectionState.none => const Icon(
-                                        Icons.radio_button_unchecked,
-                                        size: 14,
-                                      ),
-                                    };
-                                    final selectedColor = switch (state) {
-                                      _FilterSelectionState.include =>
-                                        theme.colorScheme.primaryContainer,
-                                      _FilterSelectionState.exclude =>
-                                        theme.colorScheme.errorContainer,
-                                      _FilterSelectionState.none =>
-                                        theme
-                                            .colorScheme
-                                            .surfaceContainerHighest,
-                                    };
-                                    return FilterChip(
-                                      avatar: avatar,
-                                      label: Text(itemLabel(item)),
-                                      selected: isActive,
-                                      selectedColor: selectedColor,
-                                      onSelected: (_) {
-                                        setModalState(() {
-                                          cycleState(item);
-                                        });
-                                      },
-                                    );
-                                  }).toList(),
-                                ),
-                            ],
-                          ),
+                            ),
+                            const SizedBox(height: AppSpace.sm),
+                            if (visibleItems.isEmpty)
+                              const Text('No items match your search')
+                            else
+                              Wrap(
+                                spacing: AppSpace.sm,
+                                runSpacing: AppSpace.sm,
+                                children: visibleItems.map((item) {
+                                  final state = stateFor(item);
+                                  final isActive =
+                                      state != _FilterSelectionState.none;
+                                  final avatar = switch (state) {
+                                    _FilterSelectionState.include => const Icon(
+                                      Icons.add,
+                                      size: 14,
+                                    ),
+                                    _FilterSelectionState.exclude => const Icon(
+                                      Icons.remove,
+                                      size: 14,
+                                    ),
+                                    _FilterSelectionState.none => const Icon(
+                                      Icons.radio_button_unchecked,
+                                      size: 14,
+                                    ),
+                                  };
+                                  final selectedColor = switch (state) {
+                                    _FilterSelectionState.include =>
+                                      theme.colorScheme.primaryContainer,
+                                    _FilterSelectionState.exclude =>
+                                      theme.colorScheme.errorContainer,
+                                    _FilterSelectionState.none =>
+                                      theme.colorScheme.surfaceContainerHighest,
+                                  };
+                                  return FilterChip(
+                                    avatar: avatar,
+                                    label: Text(itemLabel(item)),
+                                    selected: isActive,
+                                    selectedColor: selectedColor,
+                                    onSelected: (_) {
+                                      setModalState(() {
+                                        cycleState(item);
+                                      });
+                                    },
+                                  );
+                                }).toList(),
+                              ),
+                          ],
                         ),
                       ),
-                    ],
-                    const SizedBox(height: 16),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      alignment: WrapAlignment.end,
-                      children: [
-                        TextButton(
-                          onPressed: () {
-                            setModalState(() {
-                              include.clear();
-                              exclude.clear();
-                            });
-                          },
-                          child: const Text('Clear'),
-                        ),
-                        if (visibleItems.isNotEmpty)
-                          TextButton(
-                            onPressed: () {
-                              setModalState(() {
-                                for (final item in visibleItems) {
-                                  include.add(item);
-                                  exclude.remove(item);
-                                }
-                              });
-                            },
-                            child: const Text('Include visible'),
-                          ),
-                        if (visibleItems.isNotEmpty)
-                          TextButton(
-                            onPressed: () {
-                              setModalState(() {
-                                for (final item in visibleItems) {
-                                  exclude.add(item);
-                                  include.remove(item);
-                                }
-                              });
-                            },
-                            child: const Text('Exclude visible'),
-                          ),
-                        FilledButton(
-                          onPressed: () => Navigator.pop(
-                            context,
-                            _IncludeExcludeSelection<T>(
-                              include: Set<T>.from(include),
-                              exclude: Set<T>.from(exclude),
-                              mode: mode,
-                            ),
-                          ),
-                          child: const Text('Apply'),
-                        ),
-                      ],
                     ),
-                  ],
-                ),
+                  const SizedBox(height: AppSpace.lg),
+                ],
               ),
             );
           },
@@ -1898,9 +1930,10 @@ class _ContextChip {
     BuildContext context,
     TaskState taskState,
   ) async {
-    final result = await showDialog<Map<String, String>>(
-      context: context,
-      builder: (_) => const _DefineContextDialog(),
+    final result = await showAppSheet<Map<String, String>>(
+      context,
+      scrollControlled: true,
+      builder: (_) => const ContextEditorSheet(),
     );
     if (result == null || !context.mounted) return false;
     taskState.defineContext(
@@ -2035,12 +2068,13 @@ class _ContextListTile extends StatelessWidget {
   }
 
   Future<void> _showEditDialog(BuildContext parentContext) async {
-    final result = await showDialog<Map<String, String>>(
-      context: parentContext,
-      builder: (_) => _EditContextDialog(
-        name: taskContext.name,
-        query: taskContext.searchQuery,
-        write: taskContext.writeQuery,
+    final result = await showAppSheet<Map<String, String>>(
+      parentContext,
+      scrollControlled: true,
+      builder: (_) => ContextEditorSheet(
+        initialName: taskContext.name,
+        initialQuery: taskContext.searchQuery,
+        initialWrite: taskContext.writeQuery,
       ),
     );
     if (result != null && parentContext.mounted) {
@@ -2157,196 +2191,6 @@ class _SelectContextResult extends _ContextSheetResult {
 
 class _ClearContextResult extends _ContextSheetResult {
   const _ClearContextResult();
-}
-
-class _DefineContextDialog extends StatefulWidget {
-  const _DefineContextDialog();
-
-  @override
-  State<_DefineContextDialog> createState() => _DefineContextDialogState();
-}
-
-class _DefineContextDialogState extends State<_DefineContextDialog> {
-  late final TextEditingController _nameController;
-  late final TextEditingController _queryController;
-  late final TextEditingController _writeController;
-
-  @override
-  void initState() {
-    super.initState();
-    _nameController = TextEditingController();
-    _queryController = TextEditingController();
-    _writeController = TextEditingController();
-  }
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _queryController.dispose();
-    _writeController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text(
-        'Define Context',
-        style: TextStyle(fontWeight: FontWeight.bold),
-      ),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TextField(
-            controller: _nameController,
-            autofocus: true,
-            decoration: const InputDecoration(
-              hintText: 'e.g. work, home, study...',
-              prefixIcon: Icon(Icons.label_outline),
-            ),
-            textCapitalization: TextCapitalization.words,
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _queryController,
-            decoration: const InputDecoration(
-              hintText: 'Read filter, e.g. +work or +freelance',
-              prefixIcon: Icon(Icons.filter_alt_outlined),
-            ),
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _writeController,
-            decoration: const InputDecoration(
-              hintText: 'Write default, e.g. +work project:Work',
-              prefixIcon: Icon(Icons.edit_outlined),
-            ),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () {
-            final name = _nameController.text.trim();
-            final query = _queryController.text.trim();
-            final write = _writeController.text.trim();
-            if (name.isEmpty) return;
-            Navigator.pop(context, {
-              'name': name,
-              'query': query,
-              'write': write,
-            });
-          },
-          child: const Text('Save'),
-        ),
-      ],
-    );
-  }
-}
-
-class _EditContextDialog extends StatefulWidget {
-  const _EditContextDialog({
-    required this.name,
-    required this.query,
-    required this.write,
-  });
-
-  final String name;
-  final String query;
-  final String write;
-
-  @override
-  State<_EditContextDialog> createState() => _EditContextDialogState();
-}
-
-class _EditContextDialogState extends State<_EditContextDialog> {
-  late final TextEditingController _nameController;
-  late final TextEditingController _queryController;
-  late final TextEditingController _writeController;
-
-  @override
-  void initState() {
-    super.initState();
-    _nameController = TextEditingController(text: widget.name);
-    _queryController = TextEditingController(text: widget.query);
-    _writeController = TextEditingController(text: widget.write);
-    _nameController.selection = TextSelection(
-      baseOffset: 0,
-      extentOffset: _nameController.text.length,
-    );
-  }
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _queryController.dispose();
-    _writeController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text(
-        'Edit context',
-        style: TextStyle(fontWeight: FontWeight.bold),
-      ),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TextField(
-            controller: _nameController,
-            autofocus: true,
-            decoration: const InputDecoration(
-              hintText: 'Context name',
-              prefixIcon: Icon(Icons.label_outline),
-            ),
-            textCapitalization: TextCapitalization.words,
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _queryController,
-            decoration: const InputDecoration(
-              hintText: 'Read filter, e.g. +work or +freelance',
-              prefixIcon: Icon(Icons.filter_alt_outlined),
-            ),
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _writeController,
-            decoration: const InputDecoration(
-              hintText: 'Write default, e.g. +work project:Work',
-              prefixIcon: Icon(Icons.edit_outlined),
-            ),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () {
-            final name = _nameController.text.trim();
-            final query = _queryController.text.trim();
-            final write = _writeController.text.trim();
-            if (name.isEmpty) return;
-            Navigator.pop(context, {
-              'name': name,
-              'query': query,
-              'write': write,
-            });
-          },
-          child: const Text('Save'),
-        ),
-      ],
-    );
-  }
 }
 
 /// Dims the task body only when a load has been running for a while, so quick
