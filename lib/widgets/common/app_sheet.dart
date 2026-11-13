@@ -62,6 +62,77 @@ Future<T?> showAppSheet<T>(
   );
 }
 
+/// Action bar for form sheets: Cancel on the left, title centred, primary
+/// action on the right. Replaces [AppSheetHeader] when the sheet has a confirm
+/// action; list and menu sheets keep [AppSheetHeader].
+class AppSheetActionBar extends StatelessWidget {
+  const AppSheetActionBar({
+    super.key,
+    required this.title,
+    required this.onCancel,
+    required this.actionLabel,
+    this.onAction,
+    this.cancelLabel = 'Cancel',
+  });
+
+  final String title;
+  final VoidCallback onCancel;
+  final String actionLabel;
+
+  /// `null` renders the action disabled.
+  final VoidCallback? onAction;
+  final String cancelLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpace.lg,
+        0,
+        AppSpace.lg,
+        AppSpace.sm,
+      ),
+      child: SizedBox(
+        height: 48,
+        child: Row(
+          children: [
+            TextButton(
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: AppSpace.sm),
+              ),
+              onPressed: onCancel,
+              child: Text(cancelLabel),
+            ),
+            // Fixed gutters so a title that fills the middle never sits flush
+            // against either button on a narrow sheet.
+            const SizedBox(width: AppSpace.sm),
+            Expanded(
+              child: Text(
+                title,
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            const SizedBox(width: AppSpace.sm),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: AppSpace.md),
+              ),
+              onPressed: onAction,
+              child: Text(actionLabel),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Title row at the top of a sheet, under the theme's drag handle.
 class AppSheetHeader extends StatelessWidget {
   const AppSheetHeader({

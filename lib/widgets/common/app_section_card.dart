@@ -9,6 +9,11 @@ class AppSectionCard extends StatelessWidget {
     this.padding = EdgeInsets.zero,
   });
 
+  /// A card holding [rows] stacked vertically, separated by hairlines.
+  factory AppSectionCard.rows(List<Widget> rows, {Key? key}) {
+    return AppSectionCard(key: key, child: _AppSectionRows(rows));
+  }
+
   final Widget child;
   final EdgeInsetsGeometry padding;
 
@@ -24,5 +29,30 @@ class AppSectionCard extends StatelessWidget {
       ),
       child: Padding(padding: padding, child: child),
     );
+  }
+}
+
+/// Stacks [rows] with a hairline between each pair.
+class _AppSectionRows extends StatelessWidget {
+  const _AppSectionRows(this.rows);
+
+  final List<Widget> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    final divider = Divider(
+      height: 1,
+      thickness: 1,
+      indent: AppSpace.lg,
+      color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.1),
+    );
+
+    final children = <Widget>[];
+    for (var i = 0; i < rows.length; i++) {
+      if (i > 0) children.add(divider);
+      children.add(rows[i]);
+    }
+
+    return Column(mainAxisSize: MainAxisSize.min, children: children);
   }
 }
