@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:taskdroid/theme/tokens.dart';
 
 /// A low-emphasis surface for a related group of controls or details.
 class AppSectionCard extends StatelessWidget {
@@ -18,7 +19,7 @@ class AppSectionCard extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(AppRadius.card),
         border: Border.all(color: colorScheme.outline.withValues(alpha: 0.1)),
       ),
       child: Padding(padding: padding, child: child),

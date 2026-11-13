@@ -1,23 +1,28 @@
 import 'package:flutter/material.dart';
+import 'package:taskdroid/theme/tokens.dart';
 
 /// A consistent heading for grouped content in settings and detail pages.
 class AppSectionHeader extends StatelessWidget {
-  const AppSectionHeader(this.title, {super.key, this.bottomPadding = 12});
+  const AppSectionHeader(
+    this.title, {
+    super.key,
+    this.bottomPadding = AppSpace.md,
+  });
 
   final String title;
   final double bottomPadding;
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Padding(
-      padding: EdgeInsets.only(left: 4, bottom: bottomPadding),
+      padding: EdgeInsets.only(left: AppSpace.xs, bottom: bottomPadding),
       child: Text(
         title.toUpperCase(),
-        style: TextStyle(
-          fontSize: 12,
+        style: theme.textTheme.labelMedium?.copyWith(
           fontWeight: FontWeight.bold,
           letterSpacing: 1.2,
-          color: Theme.of(context).colorScheme.primary,
+          color: theme.colorScheme.primary,
         ),
       ),
     );
