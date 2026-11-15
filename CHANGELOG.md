@@ -12,8 +12,29 @@
   in task details.
 - Opt-in trust for user-installed Android CA certificates.
 - "Test Server" now uses Rust's TLS client and the same trust store as sync.
+- Search syntax reference opened from the search field's icon, with tappable
+  examples that fill the field (closes #22).
+- Appearance setting to hide the Tags and Projects filter chips under the
+  search field; active filters stay visible and removable.
+- Setting to show Taskwarrior state tags (READY, WAITING, SCHEDULED, ACTIVE)
+  in the task list. They are hidden by default; task details keep showing all
+  tags (closes #20).
 
 ### Changed
+
+- Task editor rebuilt as a single-scroll form sheet: description first,
+  project / priority / tags chips, a timeline card for due, scheduled and
+  wait, and an Advanced section (duration, repeat rule, until, dependencies,
+  UDAs) that starts collapsed for new tasks. Projects and tags are picked in
+  their own sheets, with tag suggestions listed inline instead of in a
+  floating dropdown.
+- Tag and project filter pickers and the context define / edit forms moved
+  from dialogs to bottom sheets with a Cancel / Apply bar.
+- Every bottom sheet now shares one shape, drag handle and surface, lifts
+  above the keyboard, and tapping empty space anywhere dismisses the
+  keyboard.
+- Spacing, corner radius and motion follow a single set of design tokens;
+  animations are disabled when the system reduce-motion setting is on.
 
 - Importing a task with an existing UUID now replaces omitted Taskwarrior fields
   instead of keeping stale values.
@@ -26,6 +47,11 @@
   and write permissions, avoiding accidental removal of otherwise valid events.
 - HTTPS sync uses Android's certificate store and respects system CAs disabled
   in Settings (closes #19).
+- The task list shows a progress bar while it reloads and only dims when a
+  load takes a while; queued reloads are coalesced so the latest search query
+  wins, and switching filter tabs updates the list immediately (closes #21).
+- Taskwarrior virtual tags such as PENDING and UNBLOCKED no longer appear as
+  real tags in the task list, task editor or tag suggestions.
 
 ## [0.2.1] - 2026-07-27
 
