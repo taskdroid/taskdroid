@@ -1,6 +1,6 @@
 use super::config::Taskrc;
 use super::models::TaskStatus;
-use super::utils::map_tc_to_status;
+use super::utils::{is_virtual_tag_name, map_tc_to_status};
 use taskchampion::{
     Status as TcStatus,
     chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Timelike, Utc},
@@ -1204,43 +1204,6 @@ fn parse_relative(value: &str) -> Option<(i64, char)> {
     let number = &value[..value.len() - 1];
     let amount = number.parse::<i64>().ok()?;
     Some((amount, unit))
-}
-
-fn is_virtual_tag_name(tag: &str) -> bool {
-    matches!(
-        tag,
-        "BLOCKED"
-            | "UNBLOCKED"
-            | "BLOCKING"
-            | "DUE"
-            | "DUETODAY"
-            | "TODAY"
-            | "OVERDUE"
-            | "WEEK"
-            | "MONTH"
-            | "QUARTER"
-            | "YEAR"
-            | "ACTIVE"
-            | "SCHEDULED"
-            | "PARENT"
-            | "CHILD"
-            | "UNTIL"
-            | "WAITING"
-            | "ANNOTATED"
-            | "READY"
-            | "YESTERDAY"
-            | "TOMORROW"
-            | "TAGGED"
-            | "PENDING"
-            | "COMPLETED"
-            | "DELETED"
-            | "UDA"
-            | "ORPHAN"
-            | "PRIORITY"
-            | "PROJECT"
-            | "LATEST"
-            | "INSTANCE"
-    )
 }
 
 fn looks_like_uuid(token: &str) -> bool {

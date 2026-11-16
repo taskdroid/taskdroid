@@ -4,6 +4,8 @@ import 'package:provider/provider.dart';
 import 'package:taskdroid/providers/task_state.dart';
 import 'package:taskdroid/services/backup_file_io.dart';
 import 'package:taskdroid/widgets/app_drawer.dart';
+import 'package:taskdroid/widgets/common/app_section_card.dart';
+import 'package:taskdroid/widgets/common/app_section_header.dart';
 
 class DataManagementPage extends StatefulWidget {
   const DataManagementPage({super.key});
@@ -77,7 +79,7 @@ class _DataManagementPageState extends State<DataManagementPage>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildSectionHeader(context, 'Backup & Export'),
+          const AppSectionHeader('Backup & Export'),
           Text(
             'Generate a Taskwarrior-compatible JSON backup of your tasks. '
             'The file can be imported by Taskwarrior 3 or used to migrate your data to another device or profile.',
@@ -87,8 +89,7 @@ class _DataManagementPageState extends State<DataManagementPage>
           ),
           const SizedBox(height: 24),
 
-          _buildGroupContainer(
-            context,
+          AppSectionCard(
             child: SwitchListTile(
               title: const Text(
                 'Include History',
@@ -146,7 +147,7 @@ class _DataManagementPageState extends State<DataManagementPage>
 
           if (_exportResult != null) ...[
             const SizedBox(height: 32),
-            _buildSectionHeader(context, 'Export Result'),
+            const AppSectionHeader('Export Result'),
             const SizedBox(height: 8),
             _buildCodePreview(context, _exportResult!),
           ],
@@ -223,7 +224,7 @@ class _DataManagementPageState extends State<DataManagementPage>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildSectionHeader(context, 'Restore & Import'),
+          const AppSectionHeader('Restore & Import'),
           Text(
             'Paste a Taskwarrior JSON export or a Taskdroid backup. Tasks are matched by UUID, so importing the same file twice updates instead of duplicating.',
             style: theme.textTheme.bodyMedium?.copyWith(
@@ -232,8 +233,7 @@ class _DataManagementPageState extends State<DataManagementPage>
           ),
           const SizedBox(height: 24),
 
-          _buildGroupContainer(
-            context,
+          AppSectionCard(
             padding: const EdgeInsets.all(16),
             child: Column(
               children: [
@@ -480,40 +480,6 @@ class _DataManagementPageState extends State<DataManagementPage>
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildSectionHeader(BuildContext context, String title) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 4, bottom: 12),
-      child: Text(
-        title.toUpperCase(),
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 1.2,
-          color: Theme.of(context).colorScheme.primary,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildGroupContainer(
-    BuildContext context, {
-    required Widget child,
-    EdgeInsetsGeometry? padding,
-  }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Theme.of(
-          context,
-        ).colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(
-          color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.1),
-        ),
-      ),
-      child: Padding(padding: padding ?? EdgeInsets.zero, child: child),
     );
   }
 }

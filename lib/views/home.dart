@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -11,8 +13,11 @@ import 'package:taskdroid/services/task_query_autocomplete.dart';
 import 'package:taskdroid/services/task_query_language.dart';
 import 'package:taskdroid/services/write_query_parser.dart';
 import 'package:taskdroid/src/rust/api.dart';
+import 'package:taskdroid/theme/tokens.dart';
 import 'package:taskdroid/views/onboarding.dart';
 import 'package:taskdroid/widgets/app_drawer.dart';
+import 'package:taskdroid/widgets/common/app_sheet.dart';
+import 'package:taskdroid/widgets/context_editor_sheet.dart';
 import 'package:taskdroid/widgets/filter_tabs.dart';
 import 'package:taskdroid/widgets/task_list.dart';
 import 'package:taskdroid/widgets/task_editor.dart';
@@ -242,6 +247,17 @@ class _HomePageState extends State<HomePage>
                 taskState.includeProjects.isNotEmpty ||
                 taskState.excludeProjects.isNotEmpty,
           ),
+        SizedBox(
+          height: 2,
+          child: taskState.isLoading
+              ? LinearProgressIndicator(
+                  color: Theme.of(context).colorScheme.primary,
+                  backgroundColor: Theme.of(
+                    context,
+                  ).colorScheme.surfaceContainerHighest,
+                )
+              : null,
+        ),
         AnimatedSize(
           duration: const Duration(milliseconds: 200),
           curve: Curves.easeInOut,
@@ -262,7 +278,6 @@ class _HomePageState extends State<HomePage>
                   onOpenTags: () => _showTagSelector(context, taskState),
                   onOpenProjects: () =>
                       _showProjectSelector(context, taskState),
-                  onClear: taskState.clearFilters,
                   onRemoveTag: taskState.toggleTag,
                   onRemoveExcludedTag: taskState.toggleExcludedTag,
                   onRemoveProject: taskState.toggleProject,
@@ -270,7 +285,12 @@ class _HomePageState extends State<HomePage>
                 )
               : const SizedBox(width: double.infinity, height: 0),
         ),
-        Expanded(child: _buildTaskBody(context, taskState)),
+        Expanded(
+          child: _SlowLoadDimmer(
+            isLoading: taskState.isLoading,
+            child: _buildTaskBody(context, taskState),
+          ),
+        ),
       ],
     );
   }
@@ -286,7 +306,7 @@ class _HomePageState extends State<HomePage>
 
     return AppBar(
       title: InkWell(
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.chip),
         onTap: () => _ContextChip.showContextSheet(context, taskState),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -430,7 +450,7 @@ class _HomePageState extends State<HomePage>
       );
     }
 
-    if (taskState.isLoading && sourceTasks.isEmpty) {
+    if (taskState.isLoading && taskState.allTasks.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
 
@@ -621,13 +641,9 @@ class _HomePageState extends State<HomePage>
         (a, b) =>
             itemLabel(a).toLowerCase().compareTo(itemLabel(b).toLowerCase()),
       );
-    final applied = await showModalBottomSheet<_IncludeExcludeSelection<T>>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+    final applied = await showAppSheet<_IncludeExcludeSelection<T>>(
+      context,
+      scrollControlled: true,
       builder: (context) {
         var mode = initialMode;
         var itemSearch = '';
@@ -661,221 +677,244 @@ class _HomePageState extends State<HomePage>
             }).toList();
 
             final mediaQuery = MediaQuery.of(context);
-            return AnimatedPadding(
-              duration: const Duration(milliseconds: 180),
-              curve: Curves.easeOut,
-              padding: EdgeInsets.only(bottom: mediaQuery.viewInsets.bottom),
-              child: SafeArea(
-                top: false,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxHeight: mediaQuery.size.height * 0.85,
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          title,
-                          style: theme.textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.bold,
+            final quickActionStyle = TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: AppSpace.sm),
+              visualDensity: VisualDensity.compact,
+            );
+
+            void apply() {
+              Navigator.pop(
+                context,
+                _IncludeExcludeSelection<T>(
+                  include: Set<T>.from(include),
+                  exclude: Set<T>.from(exclude),
+                  mode: mode,
+                ),
+              );
+            }
+
+            return ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: mediaQuery.size.height * 0.85,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  AppSheetActionBar(
+                    title: title,
+                    onCancel: () => Navigator.pop(context),
+                    actionLabel: 'Apply',
+                    onAction: apply,
+                  ),
+                  if (enableModeToggle) ...[
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppSpace.lg,
+                      ),
+                      child: Row(
+                        children: [
+                          Text(
+                            modeLabel,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 16),
-                        if (enableModeToggle) ...[
-                          Row(
-                            children: [
-                              Text(
-                                modeLabel,
-                                style: theme.textTheme.bodyMedium?.copyWith(
-                                  color: theme.colorScheme.onSurfaceVariant,
-                                ),
-                              ),
-                              const Spacer(),
-                              IconButton.outlined(
-                                onPressed: () {
-                                  setModalState(() {
-                                    mode = mode == FilterMatchMode.and
-                                        ? FilterMatchMode.or
-                                        : FilterMatchMode.and;
-                                  });
-                                },
-                                icon: const Icon(Icons.sync_alt),
-                                tooltip: 'Toggle AND/OR',
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                mode.name.toUpperCase(),
-                                style: theme.textTheme.labelLarge,
-                              ),
-                            ],
+                          const Spacer(),
+                          IconButton.outlined(
+                            onPressed: () {
+                              setModalState(() {
+                                mode = mode == FilterMatchMode.and
+                                    ? FilterMatchMode.or
+                                    : FilterMatchMode.and;
+                              });
+                            },
+                            icon: const Icon(Icons.sync_alt),
+                            tooltip: 'Toggle AND/OR',
                           ),
-                          const SizedBox(height: 8),
+                          const SizedBox(width: AppSpace.sm),
+                          Text(
+                            mode.name.toUpperCase(),
+                            style: theme.textTheme.labelLarge,
+                          ),
                         ],
-                        TextField(
-                          decoration: const InputDecoration(
-                            hintText: 'Search items...',
-                            prefixIcon: Icon(Icons.search, size: 18),
-                            isDense: true,
-                          ),
-                          onChanged: (value) {
+                      ),
+                    ),
+                    const SizedBox(height: AppSpace.sm),
+                  ],
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpace.lg,
+                    ),
+                    child: TextField(
+                      decoration: const InputDecoration(
+                        hintText: 'Search items...',
+                        prefixIcon: Icon(Icons.search, size: 18),
+                        isDense: true,
+                      ),
+                      onChanged: (value) {
+                        setModalState(() {
+                          itemSearch = value;
+                        });
+                      },
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpace.lg,
+                    ),
+                    child: Wrap(
+                      alignment: WrapAlignment.end,
+                      spacing: AppSpace.sm,
+                      runSpacing: AppSpace.sm,
+                      children: [
+                        TextButton(
+                          style: quickActionStyle,
+                          onPressed: () {
                             setModalState(() {
-                              itemSearch = value;
+                              include.clear();
+                              exclude.clear();
                             });
                           },
+                          child: const Text('Clear'),
                         ),
-                        const SizedBox(height: 10),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            Chip(
-                              avatar: const Icon(Icons.add, size: 14),
-                              label: const Text('Include'),
-                              visualDensity: VisualDensity.compact,
-                              backgroundColor:
-                                  theme.colorScheme.primaryContainer,
-                            ),
-                            Chip(
-                              avatar: const Icon(Icons.remove, size: 14),
-                              label: const Text('Exclude'),
-                              visualDensity: VisualDensity.compact,
-                              backgroundColor: theme.colorScheme.errorContainer,
-                            ),
-                            Chip(
-                              avatar: const Icon(
-                                Icons.radio_button_unchecked,
-                                size: 14,
-                              ),
-                              label: const Text('Off'),
-                              visualDensity: VisualDensity.compact,
-                            ),
-                          ],
-                        ),
-                        if (allItems.isEmpty) ...[
-                          const SizedBox(height: 16),
-                          const Text('No items available'),
-                        ] else ...[
-                          const SizedBox(height: 16),
-                          Flexible(
-                            child: SingleChildScrollView(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'Tap each item to cycle include/exclude/off',
-                                    style: theme.textTheme.bodySmall?.copyWith(
-                                      color: theme.colorScheme.onSurfaceVariant,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  if (visibleItems.isEmpty)
-                                    const Text('No items match your search')
-                                  else
-                                    Wrap(
-                                      spacing: 8,
-                                      runSpacing: 8,
-                                      children: visibleItems.map((item) {
-                                        final state = stateFor(item);
-                                        final isActive =
-                                            state != _FilterSelectionState.none;
-                                        final avatar = switch (state) {
-                                          _FilterSelectionState.include =>
-                                            const Icon(Icons.add, size: 14),
-                                          _FilterSelectionState.exclude =>
-                                            const Icon(Icons.remove, size: 14),
-                                          _FilterSelectionState.none =>
-                                            const Icon(
-                                              Icons.radio_button_unchecked,
-                                              size: 14,
-                                            ),
-                                        };
-                                        final selectedColor = switch (state) {
-                                          _FilterSelectionState.include =>
-                                            theme.colorScheme.primaryContainer,
-                                          _FilterSelectionState.exclude =>
-                                            theme.colorScheme.errorContainer,
-                                          _FilterSelectionState.none =>
-                                            theme
-                                                .colorScheme
-                                                .surfaceContainerHighest,
-                                        };
-                                        return FilterChip(
-                                          avatar: avatar,
-                                          label: Text(itemLabel(item)),
-                                          selected: isActive,
-                                          selectedColor: selectedColor,
-                                          onSelected: (_) {
-                                            setModalState(() {
-                                              cycleState(item);
-                                            });
-                                          },
-                                        );
-                                      }).toList(),
-                                    ),
-                                ],
-                              ),
-                            ),
+                        if (visibleItems.isNotEmpty)
+                          TextButton(
+                            style: quickActionStyle,
+                            onPressed: () {
+                              setModalState(() {
+                                for (final item in visibleItems) {
+                                  include.add(item);
+                                  exclude.remove(item);
+                                }
+                              });
+                            },
+                            child: const Text('Include visible'),
                           ),
-                        ],
-                        const SizedBox(height: 16),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          alignment: WrapAlignment.end,
-                          children: [
-                            TextButton(
-                              onPressed: () {
-                                setModalState(() {
-                                  include.clear();
-                                  exclude.clear();
-                                });
-                              },
-                              child: const Text('Clear'),
-                            ),
-                            if (visibleItems.isNotEmpty)
-                              TextButton(
-                                onPressed: () {
-                                  setModalState(() {
-                                    for (final item in visibleItems) {
-                                      include.add(item);
-                                      exclude.remove(item);
-                                    }
-                                  });
-                                },
-                                child: const Text('Include visible'),
-                              ),
-                            if (visibleItems.isNotEmpty)
-                              TextButton(
-                                onPressed: () {
-                                  setModalState(() {
-                                    for (final item in visibleItems) {
-                                      exclude.add(item);
-                                      include.remove(item);
-                                    }
-                                  });
-                                },
-                                child: const Text('Exclude visible'),
-                              ),
-                            FilledButton(
-                              onPressed: () => Navigator.pop(
-                                context,
-                                _IncludeExcludeSelection<T>(
-                                  include: Set<T>.from(include),
-                                  exclude: Set<T>.from(exclude),
-                                  mode: mode,
-                                ),
-                              ),
-                              child: const Text('Apply'),
-                            ),
-                          ],
+                        if (visibleItems.isNotEmpty)
+                          TextButton(
+                            style: quickActionStyle,
+                            onPressed: () {
+                              setModalState(() {
+                                for (final item in visibleItems) {
+                                  exclude.add(item);
+                                  include.remove(item);
+                                }
+                              });
+                            },
+                            child: const Text('Exclude visible'),
+                          ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpace.lg,
+                    ),
+                    child: Wrap(
+                      spacing: AppSpace.sm,
+                      runSpacing: AppSpace.sm,
+                      children: [
+                        Chip(
+                          avatar: const Icon(Icons.add, size: 14),
+                          label: const Text('Include'),
+                          visualDensity: VisualDensity.compact,
+                          backgroundColor: theme.colorScheme.primaryContainer,
+                        ),
+                        Chip(
+                          avatar: const Icon(Icons.remove, size: 14),
+                          label: const Text('Exclude'),
+                          visualDensity: VisualDensity.compact,
+                          backgroundColor: theme.colorScheme.errorContainer,
+                        ),
+                        Chip(
+                          avatar: const Icon(
+                            Icons.radio_button_unchecked,
+                            size: 14,
+                          ),
+                          label: const Text('Off'),
+                          visualDensity: VisualDensity.compact,
                         ),
                       ],
                     ),
                   ),
-                ),
+                  if (allItems.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.all(AppSpace.lg),
+                      child: const Text('No items available'),
+                    )
+                  else
+                    Flexible(
+                      child: SingleChildScrollView(
+                        keyboardDismissBehavior:
+                            ScrollViewKeyboardDismissBehavior.onDrag,
+                        padding: const EdgeInsets.fromLTRB(
+                          AppSpace.lg,
+                          AppSpace.md,
+                          AppSpace.lg,
+                          0,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Tap each item to cycle include/exclude/off',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                            const SizedBox(height: AppSpace.sm),
+                            if (visibleItems.isEmpty)
+                              const Text('No items match your search')
+                            else
+                              Wrap(
+                                spacing: AppSpace.sm,
+                                runSpacing: AppSpace.sm,
+                                children: visibleItems.map((item) {
+                                  final state = stateFor(item);
+                                  final isActive =
+                                      state != _FilterSelectionState.none;
+                                  final avatar = switch (state) {
+                                    _FilterSelectionState.include => const Icon(
+                                      Icons.add,
+                                      size: 14,
+                                    ),
+                                    _FilterSelectionState.exclude => const Icon(
+                                      Icons.remove,
+                                      size: 14,
+                                    ),
+                                    _FilterSelectionState.none => const Icon(
+                                      Icons.radio_button_unchecked,
+                                      size: 14,
+                                    ),
+                                  };
+                                  final selectedColor = switch (state) {
+                                    _FilterSelectionState.include =>
+                                      theme.colorScheme.primaryContainer,
+                                    _FilterSelectionState.exclude =>
+                                      theme.colorScheme.errorContainer,
+                                    _FilterSelectionState.none =>
+                                      theme.colorScheme.surfaceContainerHighest,
+                                  };
+                                  return FilterChip(
+                                    avatar: avatar,
+                                    label: Text(itemLabel(item)),
+                                    selected: isActive,
+                                    selectedColor: selectedColor,
+                                    onSelected: (_) {
+                                      setModalState(() {
+                                        cycleState(item);
+                                      });
+                                    },
+                                  );
+                                }).toList(),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: AppSpace.lg),
+                ],
               ),
             );
           },
@@ -919,7 +958,6 @@ class TaskSearchAndFiltersRow extends StatefulWidget {
     required this.projectMatchMode,
     required this.onOpenTags,
     required this.onOpenProjects,
-    required this.onClear,
     required this.onRemoveTag,
     required this.onRemoveExcludedTag,
     required this.onRemoveProject,
@@ -939,7 +977,6 @@ class TaskSearchAndFiltersRow extends StatefulWidget {
   final FilterMatchMode projectMatchMode;
   final VoidCallback onOpenTags;
   final VoidCallback onOpenProjects;
-  final VoidCallback onClear;
   final ValueChanged<String> onRemoveTag;
   final ValueChanged<String> onRemoveExcludedTag;
   final ValueChanged<String> onRemoveProject;
@@ -974,6 +1011,15 @@ class _SearchAndFiltersRowState extends State<TaskSearchAndFiltersRow> {
     _isUpdatingController = false;
     _refreshSuggestions();
     widget.onSearchChanged(suggestion);
+  }
+
+  Future<void> _showSyntaxHelp(BuildContext context) async {
+    final example = await showAppSheet<String>(
+      context,
+      scrollControlled: true,
+      builder: (sheetContext) => _SearchSyntaxSheet(examples: _queryExamples),
+    );
+    if (example != null && mounted) _applyExample(example);
   }
 
   void _applySuggestion(TaskQuerySuggestion suggestion) {
@@ -1077,6 +1123,8 @@ class _SearchAndFiltersRowState extends State<TaskSearchAndFiltersRow> {
         widget.includeProjects.isNotEmpty ||
         widget.excludeProjects.isNotEmpty;
     final theme = Theme.of(context);
+    final showFilterBy =
+        context.watch<AppState?>()?.showTagProjectFilters ?? true;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -1088,7 +1136,48 @@ class _SearchAndFiltersRowState extends State<TaskSearchAndFiltersRow> {
             onChanged: widget.onSearchChanged,
             decoration: InputDecoration(
               hintText: 'Search tasks...',
-              prefixIcon: const Icon(Icons.search),
+              prefixIcon: Tooltip(
+                message: 'Search syntax',
+                child: InkWell(
+                  onTap: () => _showSyntaxHelp(context),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                    child: SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          const Icon(Icons.search, size: 24),
+                          Positioned(
+                            left: -5,
+                            bottom: -5,
+                            child: Container(
+                              padding: const EdgeInsets.all(1),
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: theme.colorScheme.surface,
+                              ),
+                              child: Icon(
+                                Icons.info,
+                                size: 11,
+                                color: theme.colorScheme.primary,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              prefixIconConstraints: const BoxConstraints(
+                minWidth: 0,
+                minHeight: 0,
+              ),
               suffixIcon: _searchController.text.isEmpty
                   ? null
                   : IconButton(
@@ -1150,84 +1239,70 @@ class _SearchAndFiltersRowState extends State<TaskSearchAndFiltersRow> {
                 ],
               ),
             ),
-          ] else ...[
-            const SizedBox(height: 8),
-            Text(
-              'Examples',
-              style: theme.textTheme.labelLarge?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: _queryExamples.map((example) {
-                return ActionChip(
-                  label: Text(example),
-                  onPressed: () => _applyExample(example),
-                );
-              }).toList(),
-            ),
           ],
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              ActionChip(
-                avatar: const Icon(Icons.label_outline, size: 16),
-                label: Text(
-                  widget.includeTags.isEmpty && widget.excludeTags.isEmpty
-                      ? 'Tags'
-                      : 'Tags (${widget.includeTags.length}/${widget.excludeTags.length})',
+          if (showFilterBy) const SizedBox(height: 12),
+          if (showFilterBy)
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ActionChip(
+                      avatar: const Icon(Icons.label_outline, size: 16),
+                      label: Text(
+                        widget.includeTags.isEmpty && widget.excludeTags.isEmpty
+                            ? 'Tags'
+                            : 'Tags (${widget.includeTags.length}/${widget.excludeTags.length})',
+                      ),
+                      onPressed: widget.onOpenTags,
+                      backgroundColor:
+                          widget.includeTags.isNotEmpty ||
+                              widget.excludeTags.isNotEmpty
+                          ? theme.colorScheme.primaryContainer
+                          : null,
+                    ),
+                    const SizedBox(width: 8),
+                    Icon(
+                      widget.tagMatchMode == FilterMatchMode.and
+                          ? Icons.call_merge
+                          : Icons.alt_route,
+                      size: 16,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ],
                 ),
-                onPressed: widget.onOpenTags,
-                backgroundColor:
-                    widget.includeTags.isNotEmpty ||
-                        widget.excludeTags.isNotEmpty
-                    ? theme.colorScheme.primaryContainer
-                    : null,
-              ),
-              Icon(
-                widget.tagMatchMode == FilterMatchMode.and
-                    ? Icons.call_merge
-                    : Icons.alt_route,
-                size: 16,
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-              ActionChip(
-                avatar: const Icon(Icons.folder_outlined, size: 16),
-                label: Text(
-                  widget.includeProjects.isEmpty &&
-                          widget.excludeProjects.isEmpty
-                      ? 'Projects'
-                      : 'Projects (${widget.includeProjects.length}/${widget.excludeProjects.length})',
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ActionChip(
+                      avatar: const Icon(Icons.folder_outlined, size: 16),
+                      label: Text(
+                        widget.includeProjects.isEmpty &&
+                                widget.excludeProjects.isEmpty
+                            ? 'Projects'
+                            : 'Projects (${widget.includeProjects.length}/${widget.excludeProjects.length})',
+                      ),
+                      onPressed: widget.onOpenProjects,
+                      backgroundColor:
+                          widget.includeProjects.isNotEmpty ||
+                              widget.excludeProjects.isNotEmpty
+                          ? theme.colorScheme.primaryContainer
+                          : null,
+                    ),
+                    const SizedBox(width: 8),
+                    Icon(
+                      widget.projectMatchMode == FilterMatchMode.and
+                          ? Icons.call_merge
+                          : Icons.alt_route,
+                      size: 16,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ],
                 ),
-                onPressed: widget.onOpenProjects,
-                backgroundColor:
-                    widget.includeProjects.isNotEmpty ||
-                        widget.excludeProjects.isNotEmpty
-                    ? theme.colorScheme.primaryContainer
-                    : null,
-              ),
-              Icon(
-                widget.projectMatchMode == FilterMatchMode.and
-                    ? Icons.call_merge
-                    : Icons.alt_route,
-                size: 16,
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ],
-          ),
-          if (hasFilters || _searchController.text.isNotEmpty)
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton(
-                onPressed: widget.onClear,
-                child: const Text('Clear'),
-              ),
+              ],
             ),
           if (hasFilters) ...[
             const SizedBox(height: 8),
@@ -1295,6 +1370,133 @@ class _SearchAndFiltersRowState extends State<TaskSearchAndFiltersRow> {
   }
 }
 
+class _SearchSyntaxSheet extends StatelessWidget {
+  const _SearchSyntaxSheet({required this.examples});
+
+  final List<String> examples;
+
+  static const List<(String, String)> _tags = [
+    ('+home', 'Task has this tag'),
+    ('-blocked', 'Task does not have this tag'),
+  ];
+
+  static const List<(String, String)> _projects = [
+    ('project:work', 'Project and its subprojects'),
+    ('-project:someday', 'Exclude a project'),
+  ];
+
+  static const List<(String, String)> _fields = [
+    ('status:pending', 'Filter by status'),
+    ('priority:H', 'Filter by priority (H, M, L)'),
+    ('due.before:today', 'Due before a date'),
+  ];
+
+  static const List<(String, String)> _operators = [
+    ('+home project:work', 'All terms must match'),
+    ('+home or +office', 'Either term matches'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const AppSheetHeader(
+          title: 'Search syntax',
+          subtitle:
+              'Use Taskwarrior-style terms to narrow the list. '
+              'Separate terms with spaces to require all of them.',
+        ),
+        Flexible(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpace.lg,
+              0,
+              AppSpace.lg,
+              AppSpace.xl,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _section(theme, 'Tags', _tags),
+                _section(theme, 'Projects', _projects),
+                _section(theme, 'Status and dates', _fields),
+                _section(theme, 'Combining terms', _operators),
+                Text(
+                  'Examples',
+                  style: theme.textTheme.labelLarge?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: AppSpace.sm),
+                Wrap(
+                  spacing: AppSpace.sm,
+                  runSpacing: AppSpace.sm,
+                  children: [
+                    for (final example in examples)
+                      ActionChip(
+                        label: Text(example),
+                        onPressed: () => Navigator.pop(context, example),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _section(
+    ThemeData theme,
+    String title,
+    List<(String, String)> entries,
+  ) {
+    final codeStyle = theme.textTheme.bodyMedium?.copyWith(
+      fontFamily: 'monospace',
+      fontWeight: FontWeight.w600,
+      color: theme.colorScheme.primary,
+    );
+    final descriptionStyle = theme.textTheme.bodySmall?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+    );
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: theme.textTheme.labelLarge?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 8),
+          for (final (code, description) in entries)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(flex: 2, child: Text(code, style: codeStyle)),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    flex: 3,
+                    child: Text(description, style: descriptionStyle),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class _QuerySuggestionDropdown extends StatelessWidget {
   const _QuerySuggestionDropdown({
     required this.suggestions,
@@ -1312,7 +1514,7 @@ class _QuerySuggestionDropdown extends StatelessWidget {
     return Material(
       elevation: 2,
       color: theme.colorScheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(AppRadius.control),
       clipBehavior: Clip.antiAlias,
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxHeight: 280),
@@ -1576,135 +1778,137 @@ class _ContextChip {
   ) async {
     final theme = Theme.of(context);
 
-    final result = await showModalBottomSheet<_ContextSheetResult>(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+    final result = await showAppSheet<_ContextSheetResult>(
+      context,
       builder: (ctx) {
         return StatefulBuilder(
           builder: (context, setModalState) {
             final contexts = taskState.contexts;
             final activeId = taskState.activeContext?.id;
 
-            return SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
+            return Padding(
+              padding: const EdgeInsets.only(
+                top: AppSpace.md,
+                bottom: AppSpace.lg,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  AppSheetHeader(
+                    title: 'Context',
+                    trailing: IconButton(
+                      icon: const Icon(Icons.add),
+                      tooltip: 'Define context',
+                      onPressed: () async {
+                        if (await showDefineDialog(context, taskState)) {
+                          setModalState(() {});
+                        }
+                      },
+                    ),
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: AppSpace.lg),
+                    child: Divider(),
+                  ),
+                  if (contexts.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppSpace.lg,
+                        vertical: AppSpace.xl,
+                      ),
+                      child: Center(
+                        child: Column(
+                          children: [
+                            Icon(
+                              Icons.filter_alt_outlined,
+                              size: 48,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'No contexts defined',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            TextButton.icon(
+                              onPressed: () async {
+                                if (await showDefineDialog(
+                                  context,
+                                  taskState,
+                                )) {
+                                  setModalState(() {});
+                                }
+                              },
+                              icon: const Icon(Icons.add),
+                              label: const Text('Define one'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  else
+                    Column(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Expanded(
-                          child: Text(
-                            'Context',
-                            style: theme.textTheme.titleLarge?.copyWith(
-                              fontWeight: FontWeight.bold,
+                        Flexible(
+                          child: SingleChildScrollView(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: contexts
+                                  .map(
+                                    (ctx) => _ContextListTile(
+                                      taskContext: ctx,
+                                      isActive: ctx.id == activeId,
+                                      theme: theme,
+                                      taskState: taskState,
+                                      sheetContext: context,
+                                      setModalState: setModalState,
+                                    ),
+                                  )
+                                  .toList(),
                             ),
                           ),
                         ),
-                        IconButton(
-                          icon: const Icon(Icons.add),
-                          tooltip: 'Define context',
-                          onPressed: () async {
-                            if (await showDefineDialog(context, taskState)) {
-                              setModalState(() {});
-                            }
-                          },
+                        const Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: AppSpace.lg,
+                          ),
+                          child: Divider(),
+                        ),
+                        ListTile(
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: AppSpace.lg,
+                          ),
+                          leading: Icon(
+                            activeId == null
+                                ? Icons.radio_button_checked
+                                : Icons.radio_button_unchecked,
+                            color: activeId == null
+                                ? theme.colorScheme.primary
+                                : theme.colorScheme.onSurfaceVariant,
+                          ),
+                          title: Text(
+                            'None (clear context)',
+                            style: TextStyle(
+                              fontWeight: activeId == null
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                              color: activeId == null
+                                  ? theme.colorScheme.primary
+                                  : null,
+                            ),
+                          ),
+                          onTap: () => Navigator.pop(
+                            context,
+                            const _ContextSheetResult.clear(),
+                          ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 8),
-                    const Divider(),
-                    if (contexts.isEmpty)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 24),
-                        child: Center(
-                          child: Column(
-                            children: [
-                              Icon(
-                                Icons.filter_alt_outlined,
-                                size: 48,
-                                color: theme.colorScheme.onSurfaceVariant,
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                'No contexts defined',
-                                style: theme.textTheme.bodyMedium?.copyWith(
-                                  color: theme.colorScheme.onSurfaceVariant,
-                                ),
-                              ),
-                              const SizedBox(height: 16),
-                              TextButton.icon(
-                                onPressed: () async {
-                                  if (await showDefineDialog(
-                                    context,
-                                    taskState,
-                                  )) {
-                                    setModalState(() {});
-                                  }
-                                },
-                                icon: const Icon(Icons.add),
-                                label: const Text('Define one'),
-                              ),
-                            ],
-                          ),
-                        ),
-                      )
-                    else
-                      Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Flexible(
-                            child: SingleChildScrollView(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: contexts
-                                    .map(
-                                      (ctx) => _ContextListTile(
-                                        taskContext: ctx,
-                                        isActive: ctx.id == activeId,
-                                        theme: theme,
-                                        taskState: taskState,
-                                        sheetContext: context,
-                                        setModalState: setModalState,
-                                      ),
-                                    )
-                                    .toList(),
-                              ),
-                            ),
-                          ),
-                          const Divider(),
-                          ListTile(
-                            leading: Icon(
-                              activeId == null
-                                  ? Icons.radio_button_checked
-                                  : Icons.radio_button_unchecked,
-                              color: activeId == null
-                                  ? theme.colorScheme.primary
-                                  : theme.colorScheme.onSurfaceVariant,
-                            ),
-                            title: Text(
-                              'None (clear context)',
-                              style: TextStyle(
-                                fontWeight: activeId == null
-                                    ? FontWeight.bold
-                                    : FontWeight.normal,
-                                color: activeId == null
-                                    ? theme.colorScheme.primary
-                                    : null,
-                              ),
-                            ),
-                            onTap: () => Navigator.pop(
-                              context,
-                              const _ContextSheetResult.clear(),
-                            ),
-                          ),
-                        ],
-                      ),
-                  ],
-                ),
+                ],
               ),
             );
           },
@@ -1726,9 +1930,10 @@ class _ContextChip {
     BuildContext context,
     TaskState taskState,
   ) async {
-    final result = await showDialog<Map<String, String>>(
-      context: context,
-      builder: (_) => const _DefineContextDialog(),
+    final result = await showAppSheet<Map<String, String>>(
+      context,
+      scrollControlled: true,
+      builder: (_) => const ContextEditorSheet(),
     );
     if (result == null || !context.mounted) return false;
     taskState.defineContext(
@@ -1760,6 +1965,7 @@ class _ContextListTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpace.lg),
       leading: Icon(
         isActive ? Icons.radio_button_checked : Icons.radio_button_unchecked,
         color: isActive
@@ -1805,74 +2011,46 @@ class _ContextListTile extends StatelessWidget {
   }
 
   Future<void> _showContextOptions() async {
-    final action = await showModalBottomSheet<_ContextAction>(
-      context: sheetContext,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+    final action = await showAppSheet<_ContextAction>(
+      sheetContext,
       builder: (context) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 12),
-              Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.onSurfaceVariant.withValues(
-                    alpha: 0.4,
-                  ),
-                  borderRadius: BorderRadius.circular(2),
-                ),
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AppSheetHeader(title: taskContext.name),
+            ListTile(
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: AppSpace.lg,
               ),
-              const SizedBox(height: 16),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        taskContext.name,
-                        style: theme.textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+              leading: Icon(
+                Icons.edit_outlined,
+                color: theme.colorScheme.primary,
               ),
-              const SizedBox(height: 8),
-              ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 24),
-                leading: Icon(
-                  Icons.edit_outlined,
-                  color: theme.colorScheme.primary,
-                ),
-                title: const Text(
-                  'Edit',
-                  style: TextStyle(fontWeight: FontWeight.w500),
-                ),
-                onTap: () => Navigator.pop(context, _ContextAction.edit),
+              title: const Text(
+                'Edit',
+                style: TextStyle(fontWeight: FontWeight.w500),
               ),
-              ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 24),
-                leading: Icon(
-                  Icons.delete_outline,
+              onTap: () => Navigator.pop(context, _ContextAction.edit),
+            ),
+            ListTile(
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: AppSpace.lg,
+              ),
+              leading: Icon(
+                Icons.delete_outline,
+                color: theme.colorScheme.error,
+              ),
+              title: Text(
+                'Delete',
+                style: TextStyle(
+                  fontWeight: FontWeight.w500,
                   color: theme.colorScheme.error,
                 ),
-                title: Text(
-                  'Delete',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w500,
-                    color: theme.colorScheme.error,
-                  ),
-                ),
-                onTap: () => Navigator.pop(context, _ContextAction.delete),
               ),
-              const SizedBox(height: 16),
-            ],
-          ),
+              onTap: () => Navigator.pop(context, _ContextAction.delete),
+            ),
+            const SizedBox(height: AppSpace.lg),
+          ],
         );
       },
     );
@@ -1890,12 +2068,13 @@ class _ContextListTile extends StatelessWidget {
   }
 
   Future<void> _showEditDialog(BuildContext parentContext) async {
-    final result = await showDialog<Map<String, String>>(
-      context: parentContext,
-      builder: (_) => _EditContextDialog(
-        name: taskContext.name,
-        query: taskContext.searchQuery,
-        write: taskContext.writeQuery,
+    final result = await showAppSheet<Map<String, String>>(
+      parentContext,
+      scrollControlled: true,
+      builder: (_) => ContextEditorSheet(
+        initialName: taskContext.name,
+        initialQuery: taskContext.searchQuery,
+        initialWrite: taskContext.writeQuery,
       ),
     );
     if (result != null && parentContext.mounted) {
@@ -2014,192 +2193,63 @@ class _ClearContextResult extends _ContextSheetResult {
   const _ClearContextResult();
 }
 
-class _DefineContextDialog extends StatefulWidget {
-  const _DefineContextDialog();
+/// Dims the task body only when a load has been running for a while, so quick
+/// reloads (marking a task done, debounced search keystrokes) do not flash.
+class _SlowLoadDimmer extends StatefulWidget {
+  const _SlowLoadDimmer({required this.isLoading, required this.child});
+
+  /// How long a load may run before the body dims.
+  static const Duration delay = Duration(milliseconds: 300);
+
+  final bool isLoading;
+  final Widget child;
 
   @override
-  State<_DefineContextDialog> createState() => _DefineContextDialogState();
+  State<_SlowLoadDimmer> createState() => _SlowLoadDimmerState();
 }
 
-class _DefineContextDialogState extends State<_DefineContextDialog> {
-  late final TextEditingController _nameController;
-  late final TextEditingController _queryController;
-  late final TextEditingController _writeController;
+class _SlowLoadDimmerState extends State<_SlowLoadDimmer> {
+  Timer? _timer;
+  bool _dimmed = false;
 
   @override
   void initState() {
     super.initState();
-    _nameController = TextEditingController();
-    _queryController = TextEditingController();
-    _writeController = TextEditingController();
+    _sync();
+  }
+
+  @override
+  void didUpdateWidget(covariant _SlowLoadDimmer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.isLoading != widget.isLoading) _sync();
+  }
+
+  void _sync() {
+    _timer?.cancel();
+    if (!widget.isLoading) {
+      // Direct assignment: a rebuild is already scheduled.
+      _dimmed = false;
+      return;
+    }
+    _timer = Timer(_SlowLoadDimmer.delay, () {
+      if (mounted && widget.isLoading) {
+        setState(() => _dimmed = true);
+      }
+    });
   }
 
   @override
   void dispose() {
-    _nameController.dispose();
-    _queryController.dispose();
-    _writeController.dispose();
+    _timer?.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text(
-        'Define Context',
-        style: TextStyle(fontWeight: FontWeight.bold),
-      ),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TextField(
-            controller: _nameController,
-            autofocus: true,
-            decoration: const InputDecoration(
-              hintText: 'e.g. work, home, study...',
-              prefixIcon: Icon(Icons.label_outline),
-            ),
-            textCapitalization: TextCapitalization.words,
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _queryController,
-            decoration: const InputDecoration(
-              hintText: 'Read filter, e.g. +work or +freelance',
-              prefixIcon: Icon(Icons.filter_alt_outlined),
-            ),
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _writeController,
-            decoration: const InputDecoration(
-              hintText: 'Write default, e.g. +work project:Work',
-              prefixIcon: Icon(Icons.edit_outlined),
-            ),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () {
-            final name = _nameController.text.trim();
-            final query = _queryController.text.trim();
-            final write = _writeController.text.trim();
-            if (name.isEmpty) return;
-            Navigator.pop(context, {
-              'name': name,
-              'query': query,
-              'write': write,
-            });
-          },
-          child: const Text('Save'),
-        ),
-      ],
-    );
-  }
-}
-
-class _EditContextDialog extends StatefulWidget {
-  const _EditContextDialog({
-    required this.name,
-    required this.query,
-    required this.write,
-  });
-
-  final String name;
-  final String query;
-  final String write;
-
-  @override
-  State<_EditContextDialog> createState() => _EditContextDialogState();
-}
-
-class _EditContextDialogState extends State<_EditContextDialog> {
-  late final TextEditingController _nameController;
-  late final TextEditingController _queryController;
-  late final TextEditingController _writeController;
-
-  @override
-  void initState() {
-    super.initState();
-    _nameController = TextEditingController(text: widget.name);
-    _queryController = TextEditingController(text: widget.query);
-    _writeController = TextEditingController(text: widget.write);
-    _nameController.selection = TextSelection(
-      baseOffset: 0,
-      extentOffset: _nameController.text.length,
-    );
-  }
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _queryController.dispose();
-    _writeController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text(
-        'Edit context',
-        style: TextStyle(fontWeight: FontWeight.bold),
-      ),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TextField(
-            controller: _nameController,
-            autofocus: true,
-            decoration: const InputDecoration(
-              hintText: 'Context name',
-              prefixIcon: Icon(Icons.label_outline),
-            ),
-            textCapitalization: TextCapitalization.words,
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _queryController,
-            decoration: const InputDecoration(
-              hintText: 'Read filter, e.g. +work or +freelance',
-              prefixIcon: Icon(Icons.filter_alt_outlined),
-            ),
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _writeController,
-            decoration: const InputDecoration(
-              hintText: 'Write default, e.g. +work project:Work',
-              prefixIcon: Icon(Icons.edit_outlined),
-            ),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () {
-            final name = _nameController.text.trim();
-            final query = _queryController.text.trim();
-            final write = _writeController.text.trim();
-            if (name.isEmpty) return;
-            Navigator.pop(context, {
-              'name': name,
-              'query': query,
-              'write': write,
-            });
-          },
-          child: const Text('Save'),
-        ),
-      ],
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 150),
+      opacity: _dimmed ? 0.65 : 1.0,
+      child: widget.child,
     );
   }
 }

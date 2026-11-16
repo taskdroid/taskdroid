@@ -8,6 +8,9 @@ class AppState extends ChangeNotifier {
   static const String _keySyncOnStart = 'sync_on_start';
   static const String _keyLeftSwipe = 'left_swipe_action';
   static const String _keyRightSwipe = 'right_swipe_action';
+  static const String _keyShowTagProjectFilters = 'show_tag_project_filters';
+  static const String _keyShowBuiltinTagsInTaskList =
+      'show_builtin_tags_in_task_list';
   static const String trustUserCertsKey = 'trust_user_certs';
 
   bool _isDarkTheme = false;
@@ -18,6 +21,12 @@ class AppState extends ChangeNotifier {
 
   bool _trustUserCerts = false;
   bool get trustUserCerts => _trustUserCerts;
+
+  bool _showTagProjectFilters = true;
+  bool get showTagProjectFilters => _showTagProjectFilters;
+
+  bool _showBuiltinTagsInTaskList = false;
+  bool get showBuiltinTagsInTaskList => _showBuiltinTagsInTaskList;
 
   bool _isLoaded = false;
   bool get isLoaded => _isLoaded;
@@ -37,6 +46,9 @@ class AppState extends ChangeNotifier {
     _isDarkTheme = prefs.getBool(_keyDarkTheme) ?? false;
     _syncOnStart = prefs.getBool(_keySyncOnStart) ?? false;
     _trustUserCerts = prefs.getBool(trustUserCertsKey) ?? false;
+    _showTagProjectFilters = prefs.getBool(_keyShowTagProjectFilters) ?? true;
+    _showBuiltinTagsInTaskList =
+        prefs.getBool(_keyShowBuiltinTagsInTaskList) ?? false;
 
     final leftSwipeIdx =
         prefs.getInt(_keyLeftSwipe) ?? SwipeAction.markDone.index;
@@ -75,6 +87,20 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(trustUserCertsKey, value);
+  }
+
+  Future<void> setShowTagProjectFilters(bool value) async {
+    _showTagProjectFilters = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyShowTagProjectFilters, value);
+  }
+
+  Future<void> setShowBuiltinTagsInTaskList(bool value) async {
+    _showBuiltinTagsInTaskList = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyShowBuiltinTagsInTaskList, value);
   }
 
   Future<void> setLeftSwipeAction(SwipeAction action) async {

@@ -422,6 +422,44 @@ fn task_has_value(t: &taskchampion::Task, key: &str) -> bool {
     }
 }
 
+/// Names Taskwarrior treats as virtual tags rather than real user tags.
+pub(crate) fn is_virtual_tag_name(tag: &str) -> bool {
+    matches!(
+        tag,
+        "BLOCKED"
+            | "UNBLOCKED"
+            | "BLOCKING"
+            | "DUE"
+            | "DUETODAY"
+            | "TODAY"
+            | "OVERDUE"
+            | "WEEK"
+            | "MONTH"
+            | "QUARTER"
+            | "YEAR"
+            | "ACTIVE"
+            | "SCHEDULED"
+            | "PARENT"
+            | "CHILD"
+            | "UNTIL"
+            | "WAITING"
+            | "ANNOTATED"
+            | "READY"
+            | "YESTERDAY"
+            | "TOMORROW"
+            | "TAGGED"
+            | "PENDING"
+            | "COMPLETED"
+            | "DELETED"
+            | "UDA"
+            | "ORPHAN"
+            | "PRIORITY"
+            | "PROJECT"
+            | "LATEST"
+            | "INSTANCE"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -442,6 +480,14 @@ mod tests {
             "2026-07-18T12:30:45+00:00",
             "normalized to RFC 3339"
         );
+    }
+
+    #[test]
+    fn virtual_tag_names_match_taskwarrior_names() {
+        assert!(is_virtual_tag_name("READY"));
+        assert!(is_virtual_tag_name("INSTANCE"));
+        assert!(!is_virtual_tag_name("work"));
+        assert!(!is_virtual_tag_name(""));
     }
 
     fn blank_urgency_config() -> Taskrc {

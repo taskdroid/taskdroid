@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:taskdroid/models/task_virtual_flags.dart';
 import 'package:taskdroid/providers/profile_state.dart';
 import 'package:taskdroid/providers/task_state.dart';
 import 'package:taskdroid/services/calendar_service.dart';
 import 'package:taskdroid/src/rust/api.dart';
+import 'package:taskdroid/theme/tokens.dart';
+import 'package:taskdroid/widgets/common/app_section_header.dart';
+import 'package:taskdroid/widgets/common/app_sheet.dart';
 import 'package:taskdroid/widgets/task_editor.dart';
 
 enum SeriesScope { single, entire }
@@ -192,11 +196,11 @@ class _TaskDetailContent extends StatelessWidget {
               duration: duration,
             ),
 
-            _buildSectionHeader(context, 'Dates & Timeline'),
+            const AppSectionHeader('Dates & Timeline'),
             _buildDatesCard(context, colorScheme),
             const SizedBox(height: 24),
 
-            _buildSectionHeader(context, 'Properties & Relations'),
+            const AppSectionHeader('Properties & Relations'),
             _buildRelationsCard(context, colorScheme),
             const SizedBox(height: 24),
 
@@ -208,7 +212,7 @@ class _TaskDetailContent extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                _buildSectionHeader(context, 'Notes', bottomPadding: 0),
+                const AppSectionHeader('Notes', bottomPadding: 0),
                 TextButton.icon(
                   onPressed: () => _showAddNoteDialog(context),
                   icon: const Icon(Icons.add_comment_outlined, size: 18),
@@ -236,7 +240,7 @@ class _TaskDetailContent extends StatelessWidget {
         color: isStarted
             ? colorScheme.primaryContainer
             : colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(AppRadius.card),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -490,8 +494,9 @@ class _TaskDetailContent extends StatelessWidget {
 
   Widget _buildRelationsCard(BuildContext context, ColorScheme colorScheme) {
     final rows = <Widget>[];
+    final tags = userTags(task.tags);
 
-    if (task.tags.isNotEmpty) {
+    if (tags.isNotEmpty) {
       rows.add(
         _buildDetailRow(
           context,
@@ -503,7 +508,7 @@ class _TaskDetailContent extends StatelessWidget {
             spacing: 6,
             runSpacing: 6,
             alignment: WrapAlignment.end,
-            children: task.tags
+            children: tags
                 .map(
                   (t) => Container(
                     padding: const EdgeInsets.symmetric(
@@ -893,25 +898,6 @@ class _TaskDetailContent extends StatelessWidget {
     }
   }
 
-  Widget _buildSectionHeader(
-    BuildContext context,
-    String title, {
-    double bottomPadding = 12,
-  }) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: bottomPadding, left: 4),
-      child: Text(
-        title.toUpperCase(),
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 1.2,
-          color: Theme.of(context).colorScheme.primary,
-        ),
-      ),
-    );
-  }
-
   String _formatDate(String dateStr) {
     try {
       final date = DateTime.parse(dateStr).toLocal();
@@ -1047,8 +1033,8 @@ class _TaskDetailContent extends StatelessWidget {
     final taskState = context.read<TaskState>();
 
     if (task.isRecurringTemplate || task.isRecurringInstance) {
-      final scope = await showModalBottomSheet<SeriesScope>(
-        context: context,
+      final scope = await showAppSheet<SeriesScope>(
+        context,
         builder: (ctx) => Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1157,26 +1143,24 @@ class _TaskDetailContent extends StatelessWidget {
   }
 
   Future<SeriesScope?> _chooseRecurringEditScope(BuildContext context) {
-    return showModalBottomSheet<SeriesScope>(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.event_available_outlined),
-              title: const Text('This instance only'),
-              subtitle: const Text('Change just this occurrence'),
-              onTap: () => Navigator.pop(ctx, SeriesScope.single),
-            ),
-            ListTile(
-              leading: const Icon(Icons.all_inclusive),
-              title: const Text('Entire series'),
-              subtitle: const Text('Update the template and pending instances'),
-              onTap: () => Navigator.pop(ctx, SeriesScope.entire),
-            ),
-          ],
-        ),
+    return showAppSheet<SeriesScope>(
+      context,
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.event_available_outlined),
+            title: const Text('This instance only'),
+            subtitle: const Text('Change just this occurrence'),
+            onTap: () => Navigator.pop(ctx, SeriesScope.single),
+          ),
+          ListTile(
+            leading: const Icon(Icons.all_inclusive),
+            title: const Text('Entire series'),
+            subtitle: const Text('Update the template and pending instances'),
+            onTap: () => Navigator.pop(ctx, SeriesScope.entire),
+          ),
+        ],
       ),
     );
   }
@@ -1185,7 +1169,7 @@ class _TaskDetailContent extends StatelessWidget {
     TaskView original,
     TaskEditorResult newResult,
   ) {
-    final oldTags = Set<String>.from(original.tags);
+    final oldTags = Set<String>.from(userTags(original.tags));
     final newTags = Set<String>.from(newResult.tags);
     final addTags = newTags.difference(oldTags).toList();
     final removeTags = oldTags.difference(newTags).toList();
@@ -1362,7 +1346,10 @@ class _CalendarSyncStatusState extends State<_CalendarSyncStatus> {
       ),
       child: Row(
         children: [
-          if (leading != null) leading else Icon(icon, size: 18, color: iconColor),
+          if (leading != null)
+            leading
+          else
+            Icon(icon, size: 18, color: iconColor),
           const SizedBox(width: 10),
           Expanded(
             child: Text(

@@ -1,11 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:taskdroid/models/task_virtual_flags.dart';
 import 'package:taskdroid/providers/task_state.dart';
 import 'package:taskdroid/src/rust/api.dart';
+import 'package:taskdroid/theme/tokens.dart';
+import 'package:taskdroid/widgets/common/app_attribute_chip.dart';
+import 'package:taskdroid/widgets/common/app_collapsible_section.dart';
+import 'package:taskdroid/widgets/common/app_section_card.dart';
+import 'package:taskdroid/widgets/common/app_sheet.dart';
+import 'package:taskdroid/widgets/common/app_value_row.dart';
 import 'package:taskdroid/widgets/tag_input.dart';
 import 'package:taskdroid/widgets/task_selector.dart';
 import 'package:taskdroid/widgets/uda_editor.dart';
+
+/// Width reserved for the priority chip so its box never moves when a priority
+/// is picked or cleared.
+const double _priorityChipWidth = 136;
 
 enum TaskEditorMode { normal, instance, series }
 
@@ -15,20 +26,14 @@ Future<TaskEditorResult?> showTaskEditorSheet(
   TaskEditorMode mode = TaskEditorMode.normal,
   TaskEditorInitialValues? initialValues,
 }) {
-  return showModalBottomSheet<TaskEditorResult>(
-    context: context,
-    isScrollControlled: true,
-    backgroundColor: Theme.of(context).colorScheme.surface,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-    ),
-    builder: (ctx) => FractionallySizedBox(
-      heightFactor: 0.92,
-      child: TaskEditor(
-        originalTask: originalTask,
-        mode: mode,
-        initialValues: initialValues,
-      ),
+  return showAppSheet<TaskEditorResult>(
+    context,
+    scrollControlled: true,
+    heightFactor: 0.92,
+    builder: (ctx) => TaskEditor(
+      originalTask: originalTask,
+      mode: mode,
+      initialValues: initialValues,
     ),
   );
 }
@@ -85,16 +90,8 @@ class TaskEditor extends StatefulWidget {
   State<TaskEditor> createState() => _TaskEditorState();
 }
 
-class _TaskEditorState extends State<TaskEditor>
-    with SingleTickerProviderStateMixin {
-  final _formKey = GlobalKey<FormState>();
-  late TabController _tabController;
-
+class _TaskEditorState extends State<TaskEditor> {
   late final TextEditingController _descriptionController;
-  late final TextEditingController _dueDateController;
-  late final TextEditingController _waitDateController;
-  late final TextEditingController _scheduledDateController;
-  late final TextEditingController _untilDateController;
   late final TextEditingController _durationController;
   late final TextEditingController _recurrenceController;
 
@@ -114,13 +111,12 @@ class _TaskEditorState extends State<TaskEditor>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
 
     final t = widget.originalTask;
 
     _descriptionController = TextEditingController(text: t?.description ?? '');
     _selectedPriority = t?.priority ?? 'X';
-    _selectedTags = t != null ? List.from(t.tags) : [];
+    _selectedTags = t != null ? userTags(t.tags) : [];
     _currentDependencies = t != null ? Set.from(t.depends) : {};
 
     _project = t?.project ?? '';
@@ -154,50 +150,28 @@ class _TaskEditorState extends State<TaskEditor>
         }
       }
       if (iv.tags != null) {
-        _selectedTags = {..._selectedTags, ...iv.tags!}.toList();
+        _selectedTags = {..._selectedTags, ...userTags(iv.tags!)}.toList();
       }
     }
 
-    _dueDateController = _initDateController(
-      t?.due,
-      (d) => _selectedDueDate = d,
-    );
-    _waitDateController = _initDateController(
-      t?.wait,
-      (d) => _selectedWaitDate = d,
-    );
-    _scheduledDateController = _initDateController(
-      t?.scheduled,
-      (d) => _selectedScheduledDate = d,
-    );
-    _untilDateController = _initDateController(
-      t?.until,
-      (d) => _selectedUntilDate = d,
-    );
+    _selectedDueDate = _parseDate(t?.due);
+    _selectedWaitDate = _parseDate(t?.wait);
+    _selectedScheduledDate = _parseDate(t?.scheduled);
+    _selectedUntilDate = _parseDate(t?.until);
   }
 
-  TextEditingController _initDateController(
-    String? isoDate,
-    Function(DateTime) onSet,
-  ) {
-    if (isoDate != null) {
-      try {
-        final d = DateTime.parse(isoDate).toLocal();
-        onSet(d);
-        return TextEditingController(text: _formatDate(d));
-      } catch (_) {}
+  DateTime? _parseDate(String? isoDate) {
+    if (isoDate == null) return null;
+    try {
+      return DateTime.parse(isoDate).toLocal();
+    } catch (_) {
+      return null;
     }
-    return TextEditingController();
   }
 
   @override
   void dispose() {
-    _tabController.dispose();
     _descriptionController.dispose();
-    _dueDateController.dispose();
-    _waitDateController.dispose();
-    _scheduledDateController.dispose();
-    _untilDateController.dispose();
     _durationController.dispose();
     _recurrenceController.dispose();
     super.dispose();
@@ -264,17 +238,11 @@ class _TaskEditorState extends State<TaskEditor>
     if (widget.originalTask != null) excluded.add(widget.originalTask!.uuid);
     excluded.addAll(_currentDependencies);
 
-    final selectedUuid = await showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      builder: (context) => FractionallySizedBox(
-        heightFactor: 0.8,
-        child: TaskSelector(excludedUuids: excluded),
-      ),
+    final selectedUuid = await showAppSheet<String>(
+      context,
+      scrollControlled: true,
+      heightFactor: 0.8,
+      builder: (context) => TaskSelector(excludedUuids: excluded),
     );
 
     if (selectedUuid != null && mounted) {
@@ -282,170 +250,92 @@ class _TaskEditorState extends State<TaskEditor>
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final taskState = context.read<TaskState>();
-    final isEditing = widget.originalTask != null;
-    final title = switch (widget.mode) {
-      TaskEditorMode.instance => 'Edit Instance',
-      TaskEditorMode.series => 'Edit Series',
-      TaskEditorMode.normal => isEditing ? 'Edit Task' : 'New Task',
-    };
-
-    return Column(
-      children: [
-        // Drag Handle
-        Container(
-          width: 32,
-          height: 4,
-          margin: const EdgeInsets.only(top: 12, bottom: 8),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
-            borderRadius: BorderRadius.circular(2),
-          ),
-        ),
-
-        // Header
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
-          child: Text(
-            title,
-            style: theme.textTheme.titleLarge?.copyWith(
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ),
-        if (widget.mode != TaskEditorMode.normal)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
-            child: _buildModeBanner(theme),
-          ),
-
-        // Tabs
-        TabBar(
-          controller: _tabController,
-          labelColor: theme.colorScheme.primary,
-          unselectedLabelColor: theme.colorScheme.onSurfaceVariant,
-          indicatorSize: TabBarIndicatorSize.tab,
-          dividerColor: theme.colorScheme.outline.withValues(alpha: 0.1),
-          tabs: const [
-            Tab(text: 'General', icon: Icon(Icons.article_outlined)),
-            Tab(text: 'Advanced', icon: Icon(Icons.settings_suggest_outlined)),
-          ],
-        ),
-
-        // Body
-        Expanded(
-          child: Form(
-            key: _formKey,
-            child: TabBarView(
-              controller: _tabController,
-              children: [
-                _buildGeneralTab(
-                  theme,
-                  taskState.allProjects,
-                  taskState.allTags,
-                ),
-                _buildAdvancedTab(theme),
-              ],
-            ),
-          ),
-        ),
-
-        // Footer Actions
-        Container(
-          padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surface,
-            border: Border(
-              top: BorderSide(
-                color: theme.colorScheme.outline.withValues(alpha: 0.1),
-              ),
-            ),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 12,
-                  ),
-                ),
-                child: const Text(
-                  'Cancel',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-              ),
-              const SizedBox(width: 12),
-              FilledButton(
-                onPressed: _saveTask,
-                style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 32,
-                    vertical: 12,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                ),
-                child: Text(
-                  isEditing ? 'Save Changes' : 'Create',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
+  Future<void> _pickProject(Set<String> allProjects) async {
+    final picked = await showAppSheet<String>(
+      context,
+      scrollControlled: true,
+      heightFactor: 0.7,
+      builder: (sheetContext) =>
+          _ProjectPickerSheet(projects: allProjects, selected: _project),
     );
+
+    if (picked != null && mounted) setState(() => _project = picked);
   }
 
-  Widget _buildModeBanner(ThemeData theme) {
-    final isSeries = widget.mode == TaskEditorMode.series;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: isSeries
-            ? theme.colorScheme.primaryContainer.withValues(alpha: 0.55)
-            : theme.colorScheme.secondaryContainer.withValues(alpha: 0.55),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color:
-              (isSeries
-                      ? theme.colorScheme.primary
-                      : theme.colorScheme.secondary)
-                  .withValues(alpha: 0.25),
-        ),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+  Future<void> _pickPriority() async {
+    const options = [
+      ('X', 'None'),
+      ('L', 'Low'),
+      ('M', 'Medium'),
+      ('H', 'High'),
+    ];
+
+    final picked = await showAppSheet<String>(
+      context,
+      builder: (context) => Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            isSeries ? Icons.all_inclusive : Icons.event_repeat,
-            size: 20,
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              isSeries
-                  ? 'Changes apply to the series template and pending generated instances. Completed history stays unchanged.'
-                  : 'You are editing one occurrence only. The recurring series will continue.',
-              style: theme.textTheme.bodySmall?.copyWith(height: 1.35),
+          const AppSheetHeader(title: 'Priority'),
+          for (final (code, label) in options)
+            ListTile(
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: AppSpace.lg,
+              ),
+              leading: const Icon(Icons.flag_outlined),
+              title: Text(label),
+              trailing: _selectedPriority == code
+                  ? const Icon(Icons.check)
+                  : null,
+              onTap: () => Navigator.pop(context, code),
             ),
-          ),
+          const SizedBox(height: AppSpace.lg),
         ],
       ),
     );
+
+    if (picked != null && mounted) {
+      setState(() => _selectedPriority = picked);
+    }
+  }
+
+  Future<void> _pickTags(Set<String> availableTags) async {
+    var tags = List<String>.from(_selectedTags);
+
+    final picked = await showAppSheet<List<String>>(
+      context,
+      scrollControlled: true,
+      heightFactor: 0.85,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, setSheetState) => Column(
+          children: [
+            AppSheetActionBar(
+              title: 'Tags',
+              onCancel: () => Navigator.pop(context),
+              actionLabel: 'Done',
+              onAction: () => Navigator.pop(context, tags),
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: AppSpace.lg),
+                child: TagInput(
+                  selectedTags: tags,
+                  availableTags: availableTags,
+                  onChanged: (newTags) => setSheetState(() => tags = newTags),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (picked != null && mounted) {
+      setState(() => _selectedTags = picked);
+    }
   }
 
   void _saveTask() {
-    if (_formKey.currentState?.validate() != true) return;
+    if (_descriptionController.text.trim().isEmpty) return;
 
     final finalUdas = _currentUdas.where((u) => u.key != 'duration').toList();
 
@@ -475,233 +365,286 @@ class _TaskEditorState extends State<TaskEditor>
     Navigator.pop<TaskEditorResult>(context, result);
   }
 
-  Widget _buildGeneralTab(
-    ThemeData theme,
-    Set<String> allProjects,
-    Set<String> allTags,
-  ) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
-      child: Column(
+  String? get _priorityLabel => switch (_selectedPriority) {
+    'H' => 'High',
+    'M' => 'Medium',
+    'L' => 'Low',
+    _ => null,
+  };
+
+  String? get _tagsLabel {
+    if (_selectedTags.isEmpty) return null;
+    return _selectedTags.join(' · ');
+  }
+
+  bool get _advancedInitiallyExpanded =>
+      widget.originalTask != null &&
+      (_currentUdas.isNotEmpty ||
+          _recurrence.isNotEmpty ||
+          _selectedUntilDate != null ||
+          _currentDependencies.isNotEmpty);
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final taskState = context.read<TaskState>();
+    final isEditing = widget.originalTask != null;
+    final title = switch (widget.mode) {
+      TaskEditorMode.instance => 'Edit Instance',
+      TaskEditorMode.series => 'Edit Series',
+      TaskEditorMode.normal => isEditing ? 'Edit Task' : 'New Task',
+    };
+
+    return Column(
+      children: [
+        ValueListenableBuilder<TextEditingValue>(
+          valueListenable: _descriptionController,
+          builder: (context, value, _) => AppSheetActionBar(
+            title: title,
+            onCancel: () => Navigator.pop(context),
+            actionLabel: isEditing ? 'Save' : 'Create',
+            onAction: value.text.trim().isEmpty ? null : _saveTask,
+          ),
+        ),
+        Expanded(
+          child: SingleChildScrollView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            padding: const EdgeInsets.fromLTRB(
+              AppSpace.lg,
+              AppSpace.md,
+              AppSpace.lg,
+              AppSpace.xl,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (widget.mode != TaskEditorMode.normal) ...[
+                  _buildModeBanner(theme),
+                  const SizedBox(height: AppSpace.lg),
+                ],
+                TextField(
+                  controller: _descriptionController,
+                  autofocus: !isEditing,
+                  maxLines: null,
+                  minLines: 2,
+                  textCapitalization: TextCapitalization.sentences,
+                  // Done on the keyboard only finishes typing the description;
+                  // the task is created from the action bar.
+                  textInputAction: TextInputAction.done,
+                  style: theme.textTheme.titleLarge,
+                  decoration: const InputDecoration(
+                    hintText: 'What needs doing?',
+                    isCollapsed: true,
+                    filled: false,
+                    contentPadding: EdgeInsets.zero,
+                    border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    disabledBorder: InputBorder.none,
+                    errorBorder: InputBorder.none,
+                    focusedErrorBorder: InputBorder.none,
+                  ),
+                ),
+                const SizedBox(height: AppSpace.lg),
+                _buildAttributeChips(taskState),
+                const SizedBox(height: AppSpace.xl),
+                _buildTimeline(theme),
+                const SizedBox(height: AppSpace.xl),
+                AppCollapsibleSection(
+                  title: 'Advanced',
+                  initiallyExpanded: _advancedInitiallyExpanded,
+                  child: _buildAdvanced(theme),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildModeBanner(ThemeData theme) {
+    final isSeries = widget.mode == TaskEditorMode.series;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppSpace.md),
+      decoration: BoxDecoration(
+        color: isSeries
+            ? theme.colorScheme.primaryContainer.withValues(alpha: 0.55)
+            : theme.colorScheme.secondaryContainer.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(AppRadius.input),
+        border: Border.all(
+          color:
+              (isSeries
+                      ? theme.colorScheme.primary
+                      : theme.colorScheme.secondary)
+                  .withValues(alpha: 0.25),
+        ),
+      ),
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          TextFormField(
-            controller: _descriptionController,
-            autofocus: widget.originalTask == null,
-            decoration: const InputDecoration(
-              labelText: 'Task Description *',
-              prefixIcon: Icon(Icons.description_outlined),
+          Icon(
+            isSeries ? Icons.all_inclusive : Icons.event_repeat,
+            size: 20,
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+          const SizedBox(width: AppSpace.md),
+          Expanded(
+            child: Text(
+              isSeries
+                  ? 'Changes apply to the series template and pending generated instances. Completed history stays unchanged.'
+                  : 'You are editing one occurrence only. The recurring series will continue.',
+              style: theme.textTheme.bodySmall?.copyWith(height: 1.35),
             ),
-            validator: (v) => v!.trim().isEmpty ? 'Required field' : null,
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                flex: 2,
-                child: Autocomplete<String>(
-                  initialValue: TextEditingValue(text: _project),
-                  optionsBuilder: (textEditingValue) {
-                    final filter = textEditingValue.text.toLowerCase();
-                    if (filter.isEmpty) {
-                      return allProjects;
-                    }
-                    return allProjects.where(
-                      (option) => option.toLowerCase().contains(filter),
-                    );
-                  },
-                  onSelected: (selection) {
-                    setState(() {
-                      _project = selection;
-                    });
-                  },
-                  fieldViewBuilder:
-                      (context, controller, focusNode, onFieldSubmitted) {
-                        // Sync controller with _project if they differ
-                        if (controller.text != _project) {
-                          controller.text = _project;
-                        }
-
-                        return TextField(
-                          controller: controller,
-                          focusNode: focusNode,
-                          decoration: const InputDecoration(
-                            labelText: 'Project',
-                            prefixIcon: Icon(Icons.folder_outlined),
-                          ),
-                          onChanged: (value) {
-                            setState(() {
-                              _project = value;
-                            });
-                          },
-                        );
-                      },
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                flex: 1,
-                child: DropdownButtonFormField<String>(
-                  initialValue: _selectedPriority,
-                  decoration: const InputDecoration(
-                    labelText: 'Priority',
-                    prefixIcon: Icon(Icons.flag_outlined),
-                  ),
-                  items: ['X', 'H', 'M', 'L']
-                      .map(
-                        (p) => DropdownMenuItem(
-                          value: p,
-                          child: Text(p == 'X' ? 'None' : p),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (v) => setState(() => _selectedPriority = v),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 24),
-          TagInput(
-            selectedTags: _selectedTags,
-            availableTags: allTags,
-            onChanged: (newTags) => setState(() => _selectedTags = newTags),
-          ),
-          const SizedBox(height: 32),
-          Text(
-            'Timeline',
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.bold,
-              color: theme.colorScheme.primary,
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          _buildDateField(
-            label: 'Due Date',
-            icon: Icons.event,
-            controller: _dueDateController,
-            onTap: () => _pickDateTime(_selectedDueDate, (d) {
-              setState(() {
-                _selectedDueDate = d;
-                _dueDateController.text = _formatDate(d!);
-              });
-            }),
-            onClear: () => setState(() {
-              _selectedDueDate = null;
-              _dueDateController.clear();
-            }),
-          ),
-          const SizedBox(height: 12),
-
-          _buildDateField(
-            label: 'Wait Until',
-            icon: Icons.hourglass_empty,
-            controller: _waitDateController,
-            onTap: () => _pickDateTime(_selectedWaitDate, (d) {
-              setState(() {
-                _selectedWaitDate = d;
-                _waitDateController.text = _formatDate(d!);
-              });
-            }),
-            onClear: () => setState(() {
-              _selectedWaitDate = null;
-              _waitDateController.clear();
-            }),
-          ),
-          const SizedBox(height: 12),
-
-          _buildDateField(
-            label: 'Scheduled',
-            icon: Icons.schedule,
-            controller: _scheduledDateController,
-            onTap: () => _pickDateTime(_selectedScheduledDate, (d) {
-              setState(() {
-                _selectedScheduledDate = d;
-                _scheduledDateController.text = _formatDate(d!);
-              });
-            }),
-            onClear: () => setState(() {
-              _selectedScheduledDate = null;
-              _scheduledDateController.clear();
-            }),
-          ),
-
-          SizedBox(
-            height: MediaQuery.of(context).viewInsets.bottom > 0 ? 0 : 40,
           ),
         ],
       ),
     );
   }
 
-  Widget _buildAdvancedTab(ThemeData theme) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
+  Widget _buildAttributeChips(TaskState taskState) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: AppAttributeChip(
+                icon: Icons.folder_outlined,
+                label: 'Project',
+                value: _project.isEmpty ? null : _project,
+                onTap: () => _pickProject(taskState.allProjects),
+                onClear: () => setState(() => _project = ''),
+                expand: true,
+              ),
+            ),
+            const SizedBox(width: AppSpace.sm),
+            // Fixed width so picking a priority never resizes or shifts the row.
+            SizedBox(
+              width: _priorityChipWidth,
+              child: AppAttributeChip(
+                icon: Icons.flag_outlined,
+                label: 'Priority',
+                value: _priorityLabel,
+                onTap: _pickPriority,
+                onClear: () => setState(() => _selectedPriority = 'X'),
+                expand: true,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: AppSpace.sm),
+        // Tags get the full row and up to two lines before ellipsizing.
+        AppAttributeChip(
+          icon: Icons.local_offer_outlined,
+          label: 'Tags',
+          value: _tagsLabel,
+          onTap: () => _pickTags(taskState.allTags),
+          onClear: () => setState(() => _selectedTags = []),
+          expand: true,
+          maxLines: 2,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSectionTitle(ThemeData theme, String title) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppSpace.titleToCard),
+      child: Text(
+        title,
+        style: theme.textTheme.titleMedium?.copyWith(
+          fontWeight: FontWeight.w600,
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTimeline(ThemeData theme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildSectionTitle(theme, 'Timeline'),
+        AppSectionCard.rows([
+          AppValueRow(
+            label: 'Due',
+            value: _selectedDueDate == null
+                ? null
+                : _formatDate(_selectedDueDate!),
+            onTap: () => _pickDateTime(
+              _selectedDueDate,
+              (d) => setState(() => _selectedDueDate = d),
+            ),
+            onClear: () => setState(() => _selectedDueDate = null),
+          ),
+          AppValueRow(
+            label: 'Scheduled',
+            value: _selectedScheduledDate == null
+                ? null
+                : _formatDate(_selectedScheduledDate!),
+            onTap: () => _pickDateTime(
+              _selectedScheduledDate,
+              (d) => setState(() => _selectedScheduledDate = d),
+            ),
+            onClear: () => setState(() => _selectedScheduledDate = null),
+          ),
+          AppValueRow(
+            label: 'Wait',
+            value: _selectedWaitDate == null
+                ? null
+                : _formatDate(_selectedWaitDate!),
+            onTap: () => _pickDateTime(
+              _selectedWaitDate,
+              (d) => setState(() => _selectedWaitDate = d),
+            ),
+            onClear: () => setState(() => _selectedWaitDate = null),
+          ),
+        ]),
+      ],
+    );
+  }
+
+  Widget _buildAdvanced(ThemeData theme) {
+    return Padding(
+      padding: const EdgeInsets.only(top: AppSpace.md),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Calendar Integration',
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.bold,
-              color: theme.colorScheme.primary,
-            ),
-          ),
-          const SizedBox(height: 16),
           TextFormField(
             controller: _durationController,
             keyboardType: TextInputType.number,
             inputFormatters: [FilteringTextInputFormatter.digitsOnly],
             decoration: const InputDecoration(
               labelText: 'Duration (minutes)',
-              prefixIcon: Icon(Icons.timer_outlined),
               hintText: 'Default: 60',
             ),
           ),
-          const SizedBox(height: 32),
-
-          Text(
-            'Recurrence',
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.bold,
-              color: theme.colorScheme.primary,
-            ),
-          ),
-          const SizedBox(height: 16),
-          if (widget.mode == TaskEditorMode.instance) ...[
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceContainerHighest.withValues(
-                  alpha: 0.5,
-                ),
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(
-                  color: theme.colorScheme.outline.withValues(alpha: 0.2),
-                ),
-              ),
+          const SizedBox(height: AppSpace.xl),
+          if (widget.mode == TaskEditorMode.instance)
+            AppSectionCard(
+              padding: const EdgeInsets.all(AppSpace.lg),
               child: Text(
                 'Repeat settings belong to the series. Choose "Edit series" to change the rule or end date.',
                 style: theme.textTheme.bodyMedium,
               ),
-            ),
-          ] else ...[
+            )
+          else ...[
             TextFormField(
               controller: _recurrenceController,
               decoration: const InputDecoration(
                 labelText: 'Repeat Rule',
-                prefixIcon: Icon(Icons.loop),
                 hintText: 'e.g. daily, weekly, monthly',
                 helperText:
                     'Also supports shorthand/ISO forms: 5d, 2w, 3mo, P1M, PT6H',
               ),
               onChanged: (value) => setState(() => _recurrence = value.trim()),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: AppSpace.md),
             Wrap(
-              spacing: 8,
-              runSpacing: 8,
+              spacing: AppSpace.sm,
+              runSpacing: AppSpace.sm,
               children:
                   [
                         'daily',
@@ -721,13 +664,6 @@ class _TaskEditorState extends State<TaskEditor>
                           backgroundColor: _recurrence == preset
                               ? theme.colorScheme.primaryContainer
                               : null,
-                          side: BorderSide(
-                            color: _recurrence == preset
-                                ? Colors.transparent
-                                : theme.colorScheme.outline.withValues(
-                                    alpha: 0.3,
-                                  ),
-                          ),
                           onPressed: () {
                             setState(() {
                               _recurrence = preset;
@@ -738,117 +674,157 @@ class _TaskEditorState extends State<TaskEditor>
                       )
                       .toList(),
             ),
-            const SizedBox(height: 16),
-
-            _buildDateField(
-              label: 'Repeat Until',
-              icon: Icons.event_busy,
-              controller: _untilDateController,
-              onTap: () => _pickDateTime(_selectedUntilDate, (d) {
-                setState(() {
-                  _selectedUntilDate = d;
-                  _untilDateController.text = _formatDate(d!);
-                });
-              }),
-              onClear: () => setState(() {
-                _selectedUntilDate = null;
-                _untilDateController.clear();
-              }),
-            ),
+            const SizedBox(height: AppSpace.lg),
+            AppSectionCard.rows([
+              AppValueRow(
+                label: 'Until',
+                value: _selectedUntilDate == null
+                    ? null
+                    : _formatDate(_selectedUntilDate!),
+                onTap: () => _pickDateTime(
+                  _selectedUntilDate,
+                  (d) => setState(() => _selectedUntilDate = d),
+                ),
+                onClear: () => setState(() => _selectedUntilDate = null),
+              ),
+            ]),
           ],
-          const SizedBox(height: 32),
-
+          const SizedBox(height: AppSpace.xl),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                'Blocked By',
+                'Blocked by',
                 style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: theme.colorScheme.primary,
+                  fontWeight: FontWeight.w600,
+                  color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
               TextButton.icon(
                 onPressed: _addDependency,
                 icon: const Icon(Icons.add_link, size: 18),
-                label: const Text('Add Task'),
+                label: const Text('Add'),
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpace.sm),
           if (_currentDependencies.isEmpty)
             Text(
               'No dependencies blocking this task.',
               style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
-            ),
-          ..._currentDependencies.map((uuid) {
-            return Consumer<TaskState>(
-              builder: (context, state, _) {
-                final name = state.getTaskDescription(uuid);
-                return Container(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.surfaceContainerHighest.withValues(
-                      alpha: 0.5,
-                    ),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                    leading: Icon(
-                      Icons.subdirectory_arrow_right,
-                      color: theme.colorScheme.primary,
-                    ),
-                    title: Text(
-                      name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+            )
+          else
+            AppSectionCard.rows([
+              for (final uuid in _currentDependencies)
+                Consumer<TaskState>(
+                  builder: (context, state, _) => AppValueRow(
+                    icon: Icons.subdirectory_arrow_right,
+                    label: state.getTaskDescription(uuid),
                     trailing: IconButton(
-                      icon: Icon(
-                        Icons.remove_circle_outline,
-                        color: theme.colorScheme.error,
-                      ),
+                      icon: const Icon(Icons.close, size: 18),
+                      tooltip: 'Remove',
                       onPressed: () =>
                           setState(() => _currentDependencies.remove(uuid)),
                     ),
                   ),
-                );
-              },
-            );
-          }),
-          const SizedBox(height: 32),
-
+                ),
+            ]),
+          const SizedBox(height: AppSpace.xl),
           UdaEditor(
             initialUdas: _currentUdas,
             onChanged: (newList) => _currentUdas = newList,
-          ),
-          SizedBox(
-            height: MediaQuery.of(context).viewInsets.bottom > 0 ? 0 : 40,
           ),
         ],
       ),
     );
   }
+}
 
-  Widget _buildDateField({
-    required String label,
-    required IconData icon,
-    required TextEditingController controller,
-    required VoidCallback onTap,
-    required VoidCallback onClear,
-  }) {
-    return TextFormField(
-      controller: controller,
-      readOnly: true,
-      onTap: onTap,
-      decoration: InputDecoration(
-        labelText: label,
-        prefixIcon: Icon(icon),
-        suffixIcon: controller.text.isNotEmpty
-            ? IconButton(icon: const Icon(Icons.clear), onPressed: onClear)
-            : null,
-      ),
+/// Project picker for the task editor. Owns its search field's controller so
+/// the controller outlives the sheet's exit animation: disposing it as soon as
+/// `showAppSheet` returns tears it down under the still-visible sheet.
+class _ProjectPickerSheet extends StatefulWidget {
+  const _ProjectPickerSheet({required this.projects, required this.selected});
+
+  final Set<String> projects;
+  final String selected;
+
+  @override
+  State<_ProjectPickerSheet> createState() => _ProjectPickerSheetState();
+}
+
+class _ProjectPickerSheetState extends State<_ProjectPickerSheet> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.selected);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final query = _controller.text.trim();
+    final matches =
+        widget.projects
+            .where((p) => p.toLowerCase().contains(query.toLowerCase()))
+            .toList()
+          ..sort();
+    final canUseTyped =
+        query.isNotEmpty &&
+        !widget.projects.any((p) => p.toLowerCase() == query.toLowerCase());
+
+    return Column(
+      children: [
+        const AppSheetHeader(title: 'Project'),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: AppSpace.lg),
+          child: TextField(
+            controller: _controller,
+            autofocus: true,
+            decoration: const InputDecoration(
+              hintText: 'Search or type a new project',
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+        ),
+        const SizedBox(height: AppSpace.sm),
+        Expanded(
+          child: ListView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            padding: const EdgeInsets.symmetric(vertical: AppSpace.sm),
+            children: [
+              if (canUseTyped)
+                ListTile(
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: AppSpace.lg,
+                  ),
+                  leading: const Icon(Icons.add),
+                  title: Text('Use "$query"'),
+                  onTap: () => Navigator.pop(context, query),
+                ),
+              for (final project in matches)
+                ListTile(
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: AppSpace.lg,
+                  ),
+                  leading: const Icon(Icons.folder_outlined),
+                  title: Text(project),
+                  trailing: project == widget.selected
+                      ? const Icon(Icons.check)
+                      : null,
+                  onTap: () => Navigator.pop(context, project),
+                ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

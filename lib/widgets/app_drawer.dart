@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:taskdroid/providers/profile_state.dart';
+import 'package:taskdroid/theme/tokens.dart';
 import 'package:taskdroid/version.dart';
+import 'package:taskdroid/widgets/common/app_sheet.dart';
 
 class AppDrawer extends StatelessWidget {
   const AppDrawer({super.key, required this.currentRoute});
@@ -16,9 +18,10 @@ class AppDrawer extends StatelessWidget {
     final colorScheme = theme.colorScheme;
 
     return Drawer(
-      backgroundColor: colorScheme.surface,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.horizontal(right: Radius.circular(28)),
+        borderRadius: BorderRadius.horizontal(
+          right: Radius.circular(AppRadius.sheet),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -110,7 +113,7 @@ class AppDrawer extends StatelessWidget {
           decoration: BoxDecoration(
             color: colorScheme.surfaceContainerLow,
             borderRadius: const BorderRadius.only(
-              bottomRight: Radius.circular(28),
+              bottomRight: Radius.circular(AppRadius.sheet),
             ),
           ),
           child: Column(
@@ -139,7 +142,7 @@ class AppDrawer extends StatelessWidget {
               // Profile Switcher "Pill" with fixed width handling
               InkWell(
                 onTap: () => _showProfileSelector(context, profileState),
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(AppRadius.control),
                 splashColor: colorScheme.primary.withValues(alpha: 0.2),
                 highlightColor: Colors.transparent,
                 child: Container(
@@ -150,7 +153,7 @@ class AppDrawer extends StatelessWidget {
                   ),
                   decoration: BoxDecoration(
                     color: colorScheme.primaryContainer.withValues(alpha: 0.4),
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(AppRadius.control),
                     border: Border.all(
                       color: colorScheme.primary.withValues(alpha: 0.1),
                     ),
@@ -212,60 +215,41 @@ class AppDrawer extends StatelessWidget {
       return;
     }
 
-    final profileId = await showModalBottomSheet<String>(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 12),
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
-                borderRadius: BorderRadius.circular(2),
+    final profileId = await showAppSheet<String>(
+      context,
+      builder: (context) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const AppSheetHeader(title: 'Switch Profile'),
+          ...profiles.map((profile) {
+            final isCurrent = profile.id == state.currentProfileId;
+            return ListTile(
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: AppSpace.lg,
               ),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'Switch Profile',
-              style: Theme.of(
-                context,
-              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            ...profiles.map((profile) {
-              final isCurrent = profile.id == state.currentProfileId;
-              return ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 24),
-                leading: CircleAvatar(
-                  backgroundColor: isCurrent
-                      ? colorScheme.primary
-                      : colorScheme.surfaceContainerHighest,
-                  foregroundColor: isCurrent
-                      ? colorScheme.onPrimary
-                      : colorScheme.onSurfaceVariant,
-                  child: Text(profile.name[0].toUpperCase()),
+              leading: CircleAvatar(
+                backgroundColor: isCurrent
+                    ? colorScheme.primary
+                    : colorScheme.surfaceContainerHighest,
+                foregroundColor: isCurrent
+                    ? colorScheme.onPrimary
+                    : colorScheme.onSurfaceVariant,
+                child: Text(profile.name[0].toUpperCase()),
+              ),
+              title: Text(
+                profile.name,
+                style: TextStyle(
+                  fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
                 ),
-                title: Text(
-                  profile.name,
-                  style: TextStyle(
-                    fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
-                  ),
-                ),
-                trailing: isCurrent
-                    ? Icon(Icons.check_circle, color: colorScheme.primary)
-                    : null,
-                onTap: () => Navigator.pop(context, profile.id),
-              );
-            }),
-            const SizedBox(height: 16),
-          ],
-        ),
+              ),
+              trailing: isCurrent
+                  ? Icon(Icons.check_circle, color: colorScheme.primary)
+                  : null,
+              onTap: () => Navigator.pop(context, profile.id),
+            );
+          }),
+          const SizedBox(height: AppSpace.lg),
+        ],
       ),
     );
 
@@ -318,7 +302,9 @@ class _NavButton extends StatelessWidget {
         iconColor: colorScheme.onSurfaceVariant,
         textColor: colorScheme.onSurfaceVariant,
         selectedColor: colorScheme.onSecondaryContainer,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.input),
+        ),
         tileColor: Colors.transparent,
         selectedTileColor: colorScheme.secondaryContainer,
         leading: Icon(isSelected ? activeIcon : icon),

@@ -7,7 +7,11 @@ import 'package:taskdroid/models/profile.dart';
 import 'package:taskdroid/services/profile_storage.dart';
 import 'package:taskdroid/services/taskrc_config_service.dart';
 import 'package:taskdroid/src/rust/api.dart';
+import 'package:taskdroid/theme/tokens.dart';
 import 'package:taskdroid/widgets/app_drawer.dart';
+import 'package:taskdroid/widgets/common/app_section_card.dart';
+import 'package:taskdroid/widgets/common/app_section_header.dart';
+import 'package:taskdroid/widgets/common/app_sheet.dart';
 import 'package:uuid/uuid.dart';
 
 class CredentialsPage extends StatefulWidget {
@@ -295,15 +299,15 @@ class _CredentialsPageState extends State<CredentialsPage> {
       body: Consumer<ProfileState>(
         builder: (context, profileState, _) {
           return SingleChildScrollView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
             child: Form(
               key: _formKey,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildSectionHeader(context, 'Active Profile'),
-                  _buildGroupContainer(
-                    context,
+                  const AppSectionHeader('Active Profile'),
+                  AppSectionCard(
                     padding: const EdgeInsets.all(16),
                     child: DropdownButtonFormField<String>(
                       initialValue: profileState.currentProfileId,
@@ -343,9 +347,8 @@ class _CredentialsPageState extends State<CredentialsPage> {
 
                   const SizedBox(height: 24),
 
-                  _buildSectionHeader(context, 'Profile Configuration'),
-                  _buildGroupContainer(
-                    context,
+                  const AppSectionHeader('Profile Configuration'),
+                  AppSectionCard(
                     padding: const EdgeInsets.all(20),
                     child: Column(
                       children: [
@@ -513,7 +516,7 @@ class _CredentialsPageState extends State<CredentialsPage> {
 
                   const SizedBox(height: 24),
 
-                  _buildSectionHeader(context, 'Taskwarrior Config'),
+                  const AppSectionHeader('Taskwarrior Config'),
                   _buildConfigSection(context, profileState),
                 ],
               ),
@@ -529,8 +532,7 @@ class _CredentialsPageState extends State<CredentialsPage> {
     final profile = profileState.currentProfile;
 
     if (profile == null || !_isEditing || _editingProfileId != profile.id) {
-      return _buildGroupContainer(
-        context,
+      return AppSectionCard(
         padding: const EdgeInsets.all(20),
         child: Text(
           'Select a profile to view config',
@@ -544,8 +546,7 @@ class _CredentialsPageState extends State<CredentialsPage> {
     final hasConfig = _configValues.isNotEmpty;
     final isLoaded = !_configLoading;
 
-    return _buildGroupContainer(
-      context,
+    return AppSectionCard(
       padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -751,80 +752,53 @@ class _CredentialsPageState extends State<CredentialsPage> {
     final configList = _configValues.entries.toList()
       ..sort((a, b) => a.key.compareTo(b.key));
 
-    final selected = await showModalBottomSheet<MapEntry<String, String>>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
+    final selected = await showAppSheet<MapEntry<String, String>>(
+      context,
+      scrollControlled: true,
+      heightFactor: 0.7,
       builder: (ctx) {
-        return StatefulBuilder(
-          builder: (ctx, setSheetState) {
-            return DraggableScrollableSheet(
-              initialChildSize: 0.7,
-              minChildSize: 0.4,
-              maxChildSize: 0.9,
-              expand: false,
-              builder: (context, scrollController) {
-                return Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Config Values',
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.bold),
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const AppSheetHeader(
+              title: 'Config Values',
+              subtitle: 'Tap a value to edit',
+            ),
+            Expanded(
+              child: ListView.separated(
+                padding: const EdgeInsets.only(bottom: AppSpace.lg),
+                itemCount: configList.length,
+                separatorBuilder: (_, _) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final entry = configList[index];
+                  return ListTile(
+                    dense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: AppSpace.lg,
+                    ),
+                    title: Text(
+                      entry.key,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontFamily: 'monospace',
                       ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Tap a value to edit',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
+                    ),
+                    subtitle: Text(
+                      entry.value,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontFamily: 'monospace',
+                        color: Theme.of(context).colorScheme.primary,
                       ),
-                      const SizedBox(height: 12),
-                      Expanded(
-                        child: ListView.separated(
-                          controller: scrollController,
-                          itemCount: configList.length,
-                          separatorBuilder: (_, _) => const Divider(height: 1),
-                          itemBuilder: (context, index) {
-                            final entry = configList[index];
-                            return ListTile(
-                              dense: true,
-                              title: Text(
-                                entry.key,
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  fontFamily: 'monospace',
-                                ),
-                              ),
-                              subtitle: Text(
-                                entry.value,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontFamily: 'monospace',
-                                  color: Theme.of(context).colorScheme.primary,
-                                ),
-                              ),
-                              trailing: const Icon(
-                                Icons.edit_outlined,
-                                size: 16,
-                              ),
-                              onTap: () => Navigator.pop(
-                                ctx,
-                                MapEntry(entry.key, entry.value),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            );
-          },
+                    ),
+                    trailing: const Icon(Icons.edit_outlined, size: 16),
+                    onTap: () =>
+                        Navigator.pop(ctx, MapEntry(entry.key, entry.value)),
+                  );
+                },
+              ),
+            ),
+          ],
         );
       },
     );
@@ -964,40 +938,6 @@ class _CredentialsPageState extends State<CredentialsPage> {
       ),
     );
     return confirmed ?? false;
-  }
-
-  Widget _buildSectionHeader(BuildContext context, String title) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 4, bottom: 12),
-      child: Text(
-        title.toUpperCase(),
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 1.2,
-          color: Theme.of(context).colorScheme.primary,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildGroupContainer(
-    BuildContext context, {
-    required Widget child,
-    EdgeInsetsGeometry? padding,
-  }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Theme.of(
-          context,
-        ).colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(
-          color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.1),
-        ),
-      ),
-      child: Padding(padding: padding ?? EdgeInsets.zero, child: child),
-    );
   }
 }
 

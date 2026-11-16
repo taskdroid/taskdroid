@@ -11,7 +11,11 @@ import 'package:taskdroid/services/calendar_service.dart';
 import 'package:taskdroid/services/profile_storage.dart';
 import 'package:taskdroid/services/storage_locations.dart';
 import 'package:taskdroid/services/storage_permissions.dart';
+import 'package:taskdroid/theme/tokens.dart';
 import 'package:taskdroid/widgets/app_drawer.dart';
+import 'package:taskdroid/widgets/common/app_section_card.dart';
+import 'package:taskdroid/widgets/common/app_section_header.dart';
+import 'package:taskdroid/widgets/common/app_sheet.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -51,9 +55,8 @@ class _SettingsPageState extends State<SettingsPage> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
         children: [
-          _buildSectionHeader(context, 'Appearance'),
+          const AppSectionHeader('Appearance'),
           _buildSettingGroup(
-            context,
             children: [
               SwitchListTile(
                 title: const Text(
@@ -65,14 +68,40 @@ class _SettingsPageState extends State<SettingsPage> {
                 onChanged: (value) =>
                     context.read<AppState>().setDarkTheme(value),
               ),
+              const Divider(indent: 16, endIndent: 16, height: 1),
+              SwitchListTile(
+                title: const Text(
+                  'Show tag and project filters',
+                  style: TextStyle(fontWeight: FontWeight.w500),
+                ),
+                subtitle: const Text(
+                  'Hide the filter chips and use query syntax instead',
+                ),
+                value: appState.showTagProjectFilters,
+                onChanged: (value) =>
+                    context.read<AppState>().setShowTagProjectFilters(value),
+              ),
+              const Divider(indent: 16, endIndent: 16, height: 1),
+              SwitchListTile(
+                title: const Text(
+                  'Show task state tags',
+                  style: TextStyle(fontWeight: FontWeight.w500),
+                ),
+                subtitle: const Text(
+                  'Include READY, WAITING, SCHEDULED, and ACTIVE',
+                ),
+                value: appState.showBuiltinTagsInTaskList,
+                onChanged: (value) => context
+                    .read<AppState>()
+                    .setShowBuiltinTagsInTaskList(value),
+              ),
             ],
           ),
 
           const SizedBox(height: 24),
 
-          _buildSectionHeader(context, 'Sync & Integration'),
+          const AppSectionHeader('Sync & Integration'),
           _buildSettingGroup(
-            context,
             children: [
               SwitchListTile(
                 title: const Text(
@@ -182,9 +211,8 @@ class _SettingsPageState extends State<SettingsPage> {
 
           const SizedBox(height: 24),
 
-          _buildSectionHeader(context, 'Security'),
+          const AppSectionHeader('Security'),
           _buildSettingGroup(
-            context,
             children: [
               SwitchListTile(
                 secondary: const Icon(Icons.security_outlined),
@@ -203,14 +231,13 @@ class _SettingsPageState extends State<SettingsPage> {
 
           const SizedBox(height: 24),
 
-          _buildSectionHeader(context, 'Storage'),
+          const AppSectionHeader('Storage'),
           _buildStorageSection(context),
 
           const SizedBox(height: 24),
 
-          _buildSectionHeader(context, 'Gestures'),
+          const AppSectionHeader('Gestures'),
           _buildSettingGroup(
-            context,
             padding: const EdgeInsets.all(20),
             children: [
               _buildSwipeDropdown(
@@ -280,40 +307,13 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  Widget _buildSectionHeader(BuildContext context, String title) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 4, bottom: 12),
-      child: Text(
-        title.toUpperCase(),
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 1.2,
-          color: Theme.of(context).colorScheme.primary,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSettingGroup(
-    BuildContext context, {
+  Widget _buildSettingGroup({
     required List<Widget> children,
     EdgeInsetsGeometry? padding,
   }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Theme.of(
-          context,
-        ).colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(
-          color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.1),
-        ),
-      ),
-      child: Padding(
-        padding: padding ?? EdgeInsets.zero,
-        child: Column(children: children),
-      ),
+    return AppSectionCard(
+      padding: padding ?? EdgeInsets.zero,
+      child: Column(children: children),
     );
   }
 
@@ -365,7 +365,6 @@ class _SettingsPageState extends State<SettingsPage> {
       builder: (context, snapshot) {
         final basePath = snapshot.data ?? 'Loading...';
         return _buildSettingGroup(
-          context,
           children: [
             ListTile(
               title: const Text(
@@ -433,41 +432,43 @@ class _SettingsPageState extends State<SettingsPage> {
     final currentPath = await getGlobalStoragePath();
     if (!context.mounted) return;
 
-    final result = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
+    final result = await showAppSheet<String>(
+      context,
       builder: (ctx) {
-        return SafeArea(
-          child: ListView.separated(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
-            itemBuilder: (context, index) {
-              if (index == locations.length) {
-                return ListTile(
-                  leading: const Icon(Icons.folder_open_rounded),
-                  title: const Text(
-                    'Pick a folder from device…',
-                    style: TextStyle(fontWeight: FontWeight.w500),
-                  ),
-                  subtitle: const Text('Browse internal storage'),
-                  onTap: () => Navigator.pop(ctx, '__picker__'),
-                );
-              }
-              final location = locations[index];
-              final isSelected = currentPath == location.path;
-              return ListTile(
-                title: Text(location.label),
-                subtitle: Text(
-                  location.path,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                trailing: isSelected ? const Icon(Icons.check_rounded) : null,
-                onTap: () => Navigator.pop(ctx, location.path),
-              );
-            },
-            separatorBuilder: (_, _) => const Divider(height: 1),
-            itemCount: locations.length + 1,
+        return ListView.separated(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpace.lg,
+            AppSpace.sm,
+            AppSpace.lg,
+            AppSpace.xl,
           ),
+          itemBuilder: (context, index) {
+            if (index == locations.length) {
+              return ListTile(
+                leading: const Icon(Icons.folder_open_rounded),
+                title: const Text(
+                  'Pick a folder from device…',
+                  style: TextStyle(fontWeight: FontWeight.w500),
+                ),
+                subtitle: const Text('Browse internal storage'),
+                onTap: () => Navigator.pop(ctx, '__picker__'),
+              );
+            }
+            final location = locations[index];
+            final isSelected = currentPath == location.path;
+            return ListTile(
+              title: Text(location.label),
+              subtitle: Text(
+                location.path,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: isSelected ? const Icon(Icons.check_rounded) : null,
+              onTap: () => Navigator.pop(ctx, location.path),
+            );
+          },
+          separatorBuilder: (_, _) => const Divider(height: 1),
+          itemCount: locations.length + 1,
         );
       },
     );
@@ -721,44 +722,37 @@ class _SettingsPageState extends State<SettingsPage> {
       return;
     }
 
-    final selected = await showModalBottomSheet<_CalendarChoice>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheetContext) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
+    final selected = await showAppSheet<_CalendarChoice>(
+      context,
+      builder: (sheetContext) => ListView(
+        shrinkWrap: true,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.auto_awesome_outlined),
+            title: const Text('Default writable calendar'),
+            subtitle: const Text('Use Android primary calendar when possible'),
+            onTap: () =>
+                Navigator.pop(sheetContext, const _CalendarChoice.useDefault()),
+          ),
+          const Divider(height: 1),
+          for (final calendar in calendars)
             ListTile(
-              leading: const Icon(Icons.auto_awesome_outlined),
-              title: const Text('Default writable calendar'),
-              subtitle: const Text(
-                'Use Android primary calendar when possible',
+              title: Text(calendar.name),
+              subtitle: Text(
+                [
+                  if (calendar.accountName.isNotEmpty) calendar.accountName,
+                  if (calendar.isPrimary) 'Primary',
+                ].join(' • '),
               ),
+              trailing: profileState.currentProfile?.calendarId == calendar.id
+                  ? const Icon(Icons.check)
+                  : null,
               onTap: () => Navigator.pop(
                 sheetContext,
-                const _CalendarChoice.useDefault(),
+                _CalendarChoice.selected(calendar),
               ),
             ),
-            const Divider(height: 1),
-            for (final calendar in calendars)
-              ListTile(
-                title: Text(calendar.name),
-                subtitle: Text(
-                  [
-                    if (calendar.accountName.isNotEmpty) calendar.accountName,
-                    if (calendar.isPrimary) 'Primary',
-                  ].join(' • '),
-                ),
-                trailing: profileState.currentProfile?.calendarId == calendar.id
-                    ? const Icon(Icons.check)
-                    : null,
-                onTap: () => Navigator.pop(
-                  sheetContext,
-                  _CalendarChoice.selected(calendar),
-                ),
-              ),
-          ],
-        ),
+        ],
       ),
     );
 

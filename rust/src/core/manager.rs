@@ -5,8 +5,9 @@ use super::query::{Pagination, Query, QueryResult, SortField, TaskFilter};
 use super::query_language::matches_query_with_config;
 use super::tw_json;
 use super::utils::{
-    calculate_urgency, calculate_urgency_with_inheritance, parse_date_opt_str_strict,
-    parse_date_opt_strict, parse_iso8601, task_snapshot_from_task_with_urgency,
+    calculate_urgency, calculate_urgency_with_inheritance, is_virtual_tag_name,
+    parse_date_opt_str_strict, parse_date_opt_strict, parse_iso8601,
+    task_snapshot_from_task_with_urgency,
 };
 use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
@@ -1409,42 +1410,6 @@ fn error_chain(error: &dyn StdError) -> String {
         current = source.source();
     }
     messages.join(": ")
-}
-
-fn is_virtual_tag_name(tag: &str) -> bool {
-    matches!(
-        tag,
-        "BLOCKED"
-            | "UNBLOCKED"
-            | "BLOCKING"
-            | "DUE"
-            | "DUETODAY"
-            | "TODAY"
-            | "OVERDUE"
-            | "WEEK"
-            | "MONTH"
-            | "QUARTER"
-            | "YEAR"
-            | "ACTIVE"
-            | "SCHEDULED"
-            | "PARENT"
-            | "CHILD"
-            | "UNTIL"
-            | "WAITING"
-            | "ANNOTATED"
-            | "READY"
-            | "YESTERDAY"
-            | "TOMORROW"
-            | "TAGGED"
-            | "PENDING"
-            | "COMPLETED"
-            | "DELETED"
-            | "UDA"
-            | "ORPHAN"
-            | "PRIORITY"
-            | "PROJECT"
-            | "LATEST"
-    )
 }
 
 fn explicit_tag_names(task: &taskchampion::Task) -> HashSet<String> {

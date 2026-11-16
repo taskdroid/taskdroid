@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taskdroid/providers/app_state.dart';
 import 'package:taskdroid/providers/profile_state.dart';
@@ -11,6 +10,8 @@ import 'package:taskdroid/views/home.dart';
 import 'package:taskdroid/views/credentials.dart';
 import 'package:taskdroid/views/settings.dart';
 import 'package:taskdroid/views/data_management.dart';
+import 'package:taskdroid/theme/app_theme.dart';
+import 'package:taskdroid/widgets/common/app_sheet.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -42,109 +43,16 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer<AppState>(
       builder: (context, appState, _) {
-        final baseTextTheme = GoogleFonts.soraTextTheme();
-
-        final lightColorScheme = ColorScheme.fromSeed(
-          seedColor: const Color(0xFF4F46E5),
-          brightness: Brightness.light,
-        );
-
-        final darkColorScheme = ColorScheme.fromSeed(
-          seedColor: const Color(0xFF4F46E5),
-          brightness: Brightness.dark,
-        );
-
-        final lightTheme = ThemeData(
-          useMaterial3: true,
-          colorScheme: lightColorScheme,
-          textTheme: baseTextTheme,
-          appBarTheme: const AppBarTheme(
-            centerTitle: true,
-            elevation: 0,
-            scrolledUnderElevation: 0,
-            backgroundColor: Colors.transparent,
-          ),
-          inputDecorationTheme: InputDecorationTheme(
-            filled: true,
-            fillColor: lightColorScheme.surfaceContainerHighest.withValues(
-              alpha: 0.5,
-            ),
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 16,
-              vertical: 16,
-            ),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(16),
-              borderSide: BorderSide(color: lightColorScheme.outlineVariant),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(16),
-              borderSide: BorderSide(color: lightColorScheme.outlineVariant),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(16),
-              borderSide: BorderSide(color: lightColorScheme.primary, width: 2),
-            ),
-          ),
-          cardTheme: CardThemeData(
-            elevation: 0,
-            color: lightColorScheme.surfaceContainerLow,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-              side: BorderSide(color: lightColorScheme.outlineVariant),
-            ),
-          ),
-        );
-
-        final darkTheme = ThemeData(
-          useMaterial3: true,
-          colorScheme: darkColorScheme,
-          textTheme: baseTextTheme.apply(
-            bodyColor: Colors.white,
-            displayColor: Colors.white,
-          ),
-          appBarTheme: const AppBarTheme(
-            centerTitle: true,
-            elevation: 0,
-            scrolledUnderElevation: 0,
-            backgroundColor: Colors.transparent,
-          ),
-          inputDecorationTheme: InputDecorationTheme(
-            filled: true,
-            fillColor: darkColorScheme.surfaceContainerHighest.withValues(
-              alpha: 0.5,
-            ),
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 16,
-              vertical: 16,
-            ),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(16),
-              borderSide: BorderSide.none,
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(16),
-              borderSide: BorderSide(color: darkColorScheme.primary, width: 2),
-            ),
-          ),
-          cardTheme: CardThemeData(
-            elevation: 0,
-            color: darkColorScheme.surfaceContainerLow,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-              side: BorderSide(
-                color: darkColorScheme.outlineVariant.withValues(alpha: 0.3),
-              ),
-            ),
-          ),
-        );
-
         return MaterialApp(
           title: 'Taskdroid',
           debugShowCheckedModeBanner: false,
-          theme: lightTheme,
-          darkTheme: darkTheme,
+          theme: buildAppTheme(Brightness.light),
+          darkTheme: buildAppTheme(Brightness.dark),
           themeMode: appState.isDarkTheme ? ThemeMode.dark : ThemeMode.light,
+          // Tapping dead space anywhere dismisses the keyboard, sheets
+          // included. Buttons, list tiles and fields win the gesture arena;
+          // only taps that nothing else claims reach this.
+          builder: (context, child) => AppTapToDismiss(child: child),
           initialRoute: '/',
           routes: {
             '/': (context) => const HomePage(),

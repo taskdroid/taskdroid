@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:taskdroid/models/filter_tab.dart';
 import 'package:taskdroid/providers/task_state.dart';
+import 'package:taskdroid/theme/tokens.dart';
+import 'package:taskdroid/widgets/common/app_sheet.dart';
 
 class FilterTabsRow extends StatelessWidget {
   const FilterTabsRow({super.key});
@@ -26,7 +28,10 @@ class FilterTabsRow extends StatelessWidget {
           height: 56,
           child: ListView.builder(
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpace.md,
+              vertical: AppSpace.sm,
+            ),
             itemCount: tabs.length + 1,
             itemBuilder: (context, index) {
               if (index == tabs.length) {
@@ -78,21 +83,24 @@ class _TabChip extends StatelessWidget {
     final colorScheme = theme.colorScheme;
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 4),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpace.xs),
       child: Material(
         color: Colors.transparent,
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(AppRadius.card),
         child: InkWell(
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(AppRadius.card),
           splashColor: colorScheme.primary.withValues(alpha: 0.2),
           onTap: () => taskState.switchToTab(tab.id),
           onLongPress: () => _showTabMenu(context),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 200),
             curve: Curves.fastOutSlowIn,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpace.lg,
+              vertical: AppSpace.sm,
+            ),
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(24),
+              borderRadius: BorderRadius.circular(AppRadius.card),
               color: isActive
                   ? colorScheme.primaryContainer
                   : colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
@@ -125,76 +133,50 @@ class _TabChip extends StatelessWidget {
   Future<void> _showTabMenu(BuildContext context) async {
     final canDelete = taskState.filterTabs.length > 1;
 
-    final action = await showModalBottomSheet<_TabMenuAction>(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+    final action = await showAppSheet<_TabMenuAction>(
+      context,
       builder: (context) {
         final theme = Theme.of(context);
 
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 12),
-              Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.onSurfaceVariant.withValues(
-                    alpha: 0.4,
-                  ),
-                  borderRadius: BorderRadius.circular(2),
-                ),
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const AppSheetHeader(title: 'Tab Options'),
+            ListTile(
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: AppSpace.lg,
               ),
-              const SizedBox(height: 16),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: Row(
-                  children: [
-                    Text(
-                      'Tab Options',
-                      style: theme.textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
+              leading: Icon(
+                Icons.edit_outlined,
+                color: theme.colorScheme.primary,
               ),
-              const SizedBox(height: 8),
-              ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 24),
-                leading: Icon(
-                  Icons.edit_outlined,
-                  color: theme.colorScheme.primary,
-                ),
-                title: const Text(
-                  'Rename tab',
-                  style: TextStyle(fontWeight: FontWeight.w500),
-                ),
-                onTap: () => Navigator.pop(context, _TabMenuAction.rename),
+              title: const Text(
+                'Rename tab',
+                style: TextStyle(fontWeight: FontWeight.w500),
               ),
-              ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 24),
-                leading: Icon(
-                  Icons.delete_outline,
+              onTap: () => Navigator.pop(context, _TabMenuAction.rename),
+            ),
+            ListTile(
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: AppSpace.lg,
+              ),
+              leading: Icon(
+                Icons.delete_outline,
+                color: canDelete ? theme.colorScheme.error : null,
+              ),
+              title: Text(
+                canDelete ? 'Delete tab' : 'Cannot delete last tab',
+                style: TextStyle(
+                  fontWeight: FontWeight.w500,
                   color: canDelete ? theme.colorScheme.error : null,
                 ),
-                title: Text(
-                  canDelete ? 'Delete tab' : 'Cannot delete last tab',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w500,
-                    color: canDelete ? theme.colorScheme.error : null,
-                  ),
-                ),
-                onTap: canDelete
-                    ? () => Navigator.pop(context, _TabMenuAction.delete)
-                    : null,
               ),
-              const SizedBox(height: 16),
-            ],
-          ),
+              onTap: canDelete
+                  ? () => Navigator.pop(context, _TabMenuAction.delete)
+                  : null,
+            ),
+            const SizedBox(height: AppSpace.lg),
+          ],
         );
       },
     );
@@ -306,7 +288,7 @@ class _AddTabChip extends StatelessWidget {
     final theme = Theme.of(context);
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 4),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpace.xs),
       child: ActionChip(
         avatar: Icon(
           Icons.add,
@@ -319,7 +301,11 @@ class _AddTabChip extends StatelessWidget {
           color: theme.colorScheme.outline.withValues(alpha: 0.3),
           style: BorderStyle.solid,
         ),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        shape: RoundedRectangleBorder(
+          // Same pill as the tabs; `RRect` clamps the radius to half the chip
+          // height, so this reads as a pill rather than a theme chip.
+          borderRadius: BorderRadius.circular(AppRadius.card),
+        ),
         onPressed: () => _showAddDialog(context),
       ),
     );
